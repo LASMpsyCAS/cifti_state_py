@@ -55,13 +55,16 @@ defaults:
   extent: 20
   atlas: Glasser_2016
 
-  # The MATLAB scripts read lh/rh.neighbors_IndexStart0.txt. Those tables are
-  # 2.6 MB and are not bundled; the adjacency derived from the surface mesh was
-  # verified to be the identical graph on fs_LR 32k (0 differing entries), and
-  # the cluster maps below match MATLAB vertex for vertex either way.
+  # Adjacency can come from pre-computed neighbour tables
+  # (lh/rh.neighbors_IndexStart0.txt). Those are 2.6 MB and are not bundled; the
+  # adjacency derived from the surface mesh was verified to be the identical
+  # graph on fs_LR 32k (0 differing entries), and the expected cluster maps in
+  # maps/ are reproduced vertex for vertex either way.
   neighbor_source: surface
 
-  legacy_mode: true       # reproduce the original MATLAB behaviour bit for bit
+  # Positive tail only, and +/-inf both mapped to the largest finite value.
+  # See the "Match an analysis you have already published" section of the README.
+  legacy_mode: true
 
 # ---- Rendering ------------------------------------------------------------ #
 render:

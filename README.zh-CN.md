@@ -4,6 +4,8 @@
 
 **fs_LR 32k 皮层表面的 cluster 分析、脑区报表与可视化。**
 
+给一张皮层表面上的统计图，找出过阈值后的 cluster，标出它们落在哪些脑区，再把它们画出来——命令行、Python 接口、桌面界面三个入口，共用同一套核心函数。
+
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#测试)
@@ -20,7 +22,7 @@
 ## 它做什么
 
 你手上有一张 fs_LR 32k 表面上的统计图——任何软件出的 z 图或 t 图都行。
-这个工具找出过阈值后的连通 cluster，告诉你它们落在哪些脑区，并把它们画出来。
+这个工具把它变成你真正需要的那张表和那张图。
 
 ```
 map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 图谱脑区   ──▶   表格
@@ -30,11 +32,11 @@ map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 
 
 | | |
 |---|---|
-| **三种 fs_LR CIFTI 布局都能读** | 91k、59k、64k 说的都是同一套左右 32k 皮层。顶点映射从每个文件自己的 brain model 里读，不对灰坐标总数做任何假设。GIFTI 半球对也支持。 |
-| **能逐顶点复现 MATLAB 的结果** | `legacy_mode` 下 cluster 标签图与原结果完全相同，连编号顺序都一样。有测试逐顶点对拍，见 [MATLAB 对拍](#matlab-对拍)。 |
-| **同时修掉了原来的错** | 负向 cluster 现在真的能找到，`-inf` 不再凭空造出 cluster，AAL 右半球用的是右半球的标签。[完整清单](#与-matlab-版本的差异)。 |
-| **脑区名来自图谱本身** | 每个 `label.gii` 自带的 LabelTable 就是权威来源，所以模板包里的图谱全都能用，不只是配了 CSV 的那几个。 |
-| **三个入口，一套核心** | 命令行 `cifti-state`、notebook 里 `import cifti_state`、界面 `cifti-state-gui`，调的是同一批函数。 |
+| **三种 fs_LR CIFTI 布局都能读** | 91k、59k、64k 说的都是同一套左右 32k 皮层。顶点映射从每个文件自己的 brain model 里读，不对灰坐标总数做任何假设——写回时也用你给的那种布局。GIFTI 半球对也支持。 |
+| **交代得清楚的 cluster** | 正向、负向、双向；以顶点数计的最小 extent；固定值、FDR、百分位三种阈值；编号是确定性的。每个结果都携带产生它的那份参数快照。 |
+| **脑区名来自图谱本身** | 每个 `label.gii` 自带的 LabelTable 就是权威来源，按（半球，label id）索引——所以模板包里的图谱全都能用，不只是额外配了查找表的那几个。 |
+| **老实的峰值表** | 峰值**和**均值各用各的名字，另加 SD、min/max、以 mm² 计的面积、峰值与质心坐标，以及每个 cluster 落在每个脑区的占比。 |
+| **三个入口，一套核心** | 命令行 `cifti-state`、notebook 里 `import cifti_state`、界面 `cifti-state-gui`，调的是同一批函数——界面能做的事都能写成脚本。 |
 | **能出版的图 + 能转的 3D** | surfplot 负责导出的静态图，PyVista 负责可旋转的交互视图——同一批数组，都带沟回底板。 |
 | **clone 完就能跑例子** | `example_data/` 里既有数据也有最小模板文件。克隆、安装、直接跑。 |
 
@@ -47,7 +49,7 @@ map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 
 conda create -n cifti-state python=3.11 pip -y
 conda activate cifti-state
 
-git clone https://github.com/<your-github>/cifti_state_py.git
+git clone https://github.com/LASMpsyCAS/cifti_state_py.git
 cd cifti_state_py
 
 pip install -r requirements.txt
@@ -67,7 +69,7 @@ pip install -e .
 conda create -n cifti-state python=3.11 pip -y
 conda activate cifti-state
 
-git clone https://github.com/<your-github>/cifti_state_py.git
+git clone https://github.com/LASMpsyCAS/cifti_state_py.git
 cd cifti_state_py
 
 pip install -r requirements.txt
@@ -106,7 +108,7 @@ export CIFTI_STATE_CONFIG=$PWD/example_data/example.yaml       # bash
 cifti-state check                                              # 东西都齐了吗？
 
 cifti-state run example_data/maps/group_mean_thresh_fdr_E_C.dscalar.nii \
-    --method fixed --threshold 1.039 --extent 20 --legacy \
+    --method fixed --threshold 1.039 --extent 20 \
     --atlas Glasser_2016 --render -o results/E_C
 ```
 
@@ -125,15 +127,14 @@ group_mean_thresh_fdr_E_C.dscalar: 32 clusters (L 15 / R 17)
   record           ..._cluster_extent20_thr1.039_analysis.json
 ```
 
-这 32 个 cluster 就是 MATLAB 流程给出的答案，
-而 `example_data/maps/` 里放着它的输出，可以直接核对：
+这条命令应当得到的 cluster 图就放在输入旁边，可以直接核对你装的这份能不能精确复现：
 
 ```python
 import numpy as np, nibabel as nib
 name = "group_mean_thresh_fdr_E_C_cluster_extent20_thr1.039.dscalar.nii"
-mine      = nib.load(f"results/E_C/{name}").get_fdata().ravel()
-reference = nib.load(f"example_data/maps/{name}").get_fdata().ravel()
-np.array_equal(mine, reference)      # True —— 0 个顶点不同
+mine     = nib.load(f"results/E_C/{name}").get_fdata().ravel()
+expected = nib.load(f"example_data/maps/{name}").get_fdata().ravel()
+np.array_equal(mine, expected)      # True —— 0 个顶点不同
 ```
 
 报表长这样：
@@ -154,16 +155,14 @@ cifti-state-gui                          # 界面
 ## 各种用例
 
 <details open>
-<summary><b>1 · 精确复现一次 MATLAB 分析</b></summary>
-
-`--legacy` 把所有行为差异一次性钉回原样：只做正向、原来的无穷值处理、原来的 FDR 单尾。
+<summary><b>1 · 一条命令：阈值 → cluster → 报表 → 出图</b></summary>
 
 ```bash
-cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20 --legacy
+cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20
 ```
 
-输出文件名沿用 MATLAB 脚本的命名
-（`<输入名>_cluster_extent<N>_thr<T>.dscalar.nii`），可以直接放进已有的目录结构。
+得到：cluster 标签图（`dscalar.nii`，布局与输入相同）、每个 cluster 一行的报表、
+峰值表、逐脑区的标注表，以及一份记录参数的 JSON。加 `--render` 出图。
 
 </details>
 
@@ -187,8 +186,7 @@ cifti-state run map.dscalar.nii \
 <details>
 <summary><b>3 · 输入是 t 图而不是 z 图</b></summary>
 
-统计量类型必须声明，因为 p 值换算依赖它。把 t 图当 z 图读会低估 p 值——
-这在 MATLAB 版本里是个真实存在的 bug。
+统计量类型必须声明，因为 p 值换算依赖它——把 t 图当 z 图读会悄悄低估 p 值。
 
 ```bash
 cifti-state run tmap.dscalar.nii --statistic t --df 29 --method fdr --q 0.05
@@ -222,7 +220,6 @@ threshold_method: fixed
 threshold_value: 1.09
 direction: positive
 extent: 20
-legacy_mode: true
 atlas: Glasser_2016
 top_n_regions: 2
 output_dir: results/E_D
@@ -239,13 +236,34 @@ cifti-state run --spec analysis.yaml
 </details>
 
 <details>
-<summary><b>6 · 桌面界面</b></summary>
+<summary><b>6 · 对齐一份已经发表过的分析</b></summary>
+
+有三个开关，是因为常规选择并不是唯一的选择，而一份既有结果可能是在别的选择下做出来的：
+
+| 选项 | 钉住什么 |
+|---|---|
+| `--direction positive` | 只搜正尾，于是负向 cluster 不可能存活 |
+| `--inf-policy legacy` | `±inf` 都映到最大有限值（而 `clip` 会把 `-inf` 送到最小值） |
+| `fdr_legacy_tail: true` | 只有被检验那一侧的值参与 FDR 计算 |
+
+`--legacy` 一次设定前两项：
+
+```bash
+cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20 --legacy
+```
+
+输出文件名是 `<输入名>_cluster_extent<N>_thr<T>.dscalar.nii`，可以直接放进已有的目录结构。
+
+</details>
+
+<details>
+<summary><b>7 · 桌面界面</b></summary>
 
 ```bash
 cifti-state-gui                                  # 或：cifti-state-gui map.dscalar.nii
 ```
 
-左侧三步：**Data**（选文件、声明 z 还是 t）→ **Cluster**（阈值、方向、extent、legacy）
+左侧三步：**Data**（选文件、声明 z 还是 t）→ **Cluster**（阈值、方向、extent）
 → **Anatomical report**（图谱、每个 cluster 报几个区、最小占比、表格版式）。
 右侧上方是预览，下方是 cluster 表格和日志。
 
@@ -263,7 +281,7 @@ cifti-state-gui                                  # 或：cifti-state-gui map.dsc
 </details>
 
 <details>
-<summary><b>7 · Python 接口——八行跑完整个流程</b></summary>
+<summary><b>8 · Python 接口——八行跑完整个流程</b></summary>
 
 ```python
 from cifti_state import load_settings, run_analysis, AnalysisSpec
@@ -272,7 +290,7 @@ settings = load_settings("example_data/example.yaml")
 spec = AnalysisSpec(
     input_path="example_data/maps/group_mean_thresh_fdr_E_C.dscalar.nii",
     threshold_method="fixed", threshold_value=1.039,
-    extent=20, legacy_mode=True, atlas="Glasser_2016",
+    extent=20, atlas="Glasser_2016",
     output_dir="results/E_C", report_formats=("csv", "xlsx"), render=True,
 )
 result = run_analysis(spec, settings)
@@ -286,7 +304,7 @@ result.to_json("run.json")       # 足以复现这次运行
 </details>
 
 <details>
-<summary><b>8 · Python 接口——需要拆开用的时候</b></summary>
+<summary><b>9 · Python 接口——需要拆开用的时候</b></summary>
 
 ```python
 from cifti_state import load_settings
@@ -319,7 +337,7 @@ thr.describe(), thr.positive, thr.n_suprathreshold
 
 # 3 · cluster
 adjacency = build_adjacency(stat_map, settings, AnalysisSpec(mesh="32k"))
-clusters = find_clusters(stat_map, adjacency, thr, extent=20, legacy_mode=True)
+clusters = find_clusters(stat_map, adjacency, thr, extent=20)
 clusters.n_clusters, clusters.n_left, clusters.n_right     # (76, 38, 38)
 clusters.labels_left        # (32492,) int，0 表示不属于任何 cluster
 clusters.sizes()            # {1: 114, 2: 408, 3: 707, …}
@@ -344,7 +362,7 @@ save_like("clusters_3_7_12.dscalar.nii", left, right, stat_map.template,
 </details>
 
 <details>
-<summary><b>9 · Python 接口——出图与 3D</b></summary>
+<summary><b>10 · Python 接口——出图与 3D</b></summary>
 
 ```python
 from cifti_state.viz.render import render_stat_map, render_clusters, save_figure
@@ -393,7 +411,7 @@ plotter.show()
 </details>
 
 <details>
-<summary><b>10 · 调用 Connectome Workbench</b></summary>
+<summary><b>11 · 调用 Connectome Workbench</b></summary>
 
 ```python
 from cifti_state.wb import probe, smooth_cifti, cifti_separate, open_in_wb_view
@@ -477,8 +495,13 @@ resources:
 下游拿到的一律是完整网格数组加一个 `present` 掩码，所以顶点索引与曲面、图谱天然对齐，
 不需要额外记账——输出也按输入自身的布局写回。
 
-其他网格密度（10k、59k、164k）同理，只要图谱和邻接表对得上。
 一对 `*.func.gii` 度量文件可以用 `load_surface_stat_map_from_gifti` 读入。
+其他网格密度现在也是同样的机制，只要模板对得上——见[路线图](#路线图)。
+
+**邻接**有两个来源：邻接表文件（`neighbor_source: txt`，每个顶点一行），
+或者曲面网格本身（`neighbor_source: surface`）。
+两者在 fs_LR 32k 上是同一个图——逐顶点核对过，32480 个顶点 6 邻居、12 个顶点 5 邻居——
+而走网格不需要额外文件，所以自带例子用的就是它。
 
 ## 图谱
 
@@ -490,7 +513,8 @@ cifti-state atlases --all    # 连没登记进 registry 的也列出来
 脑区名来自每个 `label.gii` 自带的 LabelTable，所以只要符合
 `<name>.32k.{L,R}.label.gii` 命名约定的图谱**都能用**——Glasser 2016、AAL、Yeo 7/17、
 Schaefer、Gordon、Power、Desikan、Destrieux、Fan、Shen、Baldassano、Wang、
-各种 Icosahedron，以及模板包里的其余图谱。
+各种 Icosahedron，以及模板包里的其余图谱。标签按（半球，label id）索引，
+所以两个半球复用同一段 id 的图谱不需要任何偏移就能正确处理。
 配了 CSV 的，CSV 作为显示名覆盖叠在上面。
 
 ## 沟回底板
@@ -557,49 +581,65 @@ python examples/check_3d.py              # 或加 --offscreen，改成存 PNG
 所以你知道是*哪一层*坏了，而不用猜。最常见的答案是 VTK 拿不到 OpenGL 上下文：
 远程桌面一般给不了，显卡驱动太老也可能给不了。Figure 页签不需要它。
 
-## MATLAB 对拍
+## 路线图
 
-`tests/test_regression.py` 与 `example_data/maps/` 里的参考 cluster 图逐顶点对拍：
+### 顶点级统计与 RFT cluster 校正
 
-| 数据 | 阈值 | extent | MATLAB | cifti_state | 不同的顶点数 |
-|---|---|---|---|---|---|
-| `group_mean_thresh_fdr_E_C` | 1.039 | 20 | 32 (L 15 / R 17) | 32 (L 15 / R 17) | **0** |
-| `group_mean_thresh_fdr_E_D` | 1.09 | 20 | 76 (L 38 / R 38) | 76 (L 38 / R 38) | **0** |
+目前 `cifti_state` 的起点是一张你在别处算好的统计图。下一个大块是
+`cifti_state.stats` 模块，把
+[SurfStat](https://www.math.mcgill.ca/keith/surfstat/) 的那套模型搬进 Python，
+让设计矩阵进去、校正后的 cluster 推断出来，整个过程不用离开这个流程：
 
-包括 cluster 编号——编号按（半球，符号，最小顶点索引）确定，是确定性的。
+| 计划实现 | SurfStat 对应 | 得到什么 |
+|---|---|---|
+| 模型项与设计矩阵 | `SurfStatLinMod` | 跨被试的顶点级线性模型（含混合效应） |
+| 对比 | `SurfStatT`、`SurfStatF` | t 图和 F 图，直接喂给现有的 cluster 环节 |
+| 从模型残差算 resel | `SurfStatResels` | 曲面的内在平滑度，以 resel 计 |
+| 校正后的 P 值 | `SurfStatP` | 随机场理论下的峰值级和 cluster 范围级 P 值，FWE 校正 |
+| 已有的 BH-FDR | `SurfStatQ` | 已经实现，作为另一个选项保留 |
 
-### 与 MATLAB 版本的差异
+**为什么两者要一起来。** RFT 的 cluster 范围 P 值依赖底层随机场的平滑度，
+而 SurfStat 是从 GLM 残差里取这个量的。改从一张做好的统计图去估当然诱人，
+但有偏：在这张曲面上做模拟，估出来的平滑度偏低 6–17%，
+于是实际的族系错误率被推到 **0.06–0.18**，而名义值是 0.05——具体多少取决于成簇阈值。
+把真平滑度喂进去，同一段代码得到的正好是 **0.050**。
+所以只有拿到残差，这个校正才可信——模型层因此要先做，RFT 跟着它一起交付，而不是抢在它前面。
 
-是修正，不是重构。前四条会改变结果：
+有两件事会更早落地，给已经手里有这些东西的人用：
 
-1. **负向 cluster 现在真的能找到。** `get_clusters_fsLR32k.m` 先用
-   `map .* (map > threshold)` 掩蔽，再用 `threshold = 0` 去搜，
-   于是所有低于阈值的顶点都变成了正好 0，负向 cluster 永远不可能存活。
-   `direction` 可选 `positive` / `negative` / `two_sided`。
-2. **无穷值的处理改成对称的。** `map(isinf(map)) = max(...)` 把 `-inf` 变成了一个很大的
-   *正* 值，凭空造出 cluster。`inf_policy="clip"` 把 `+inf` 送到最大有限值，
-   `-inf` 送到最小有限值。
-3. **AAL 右半球的标签是错的。** `w_find_brain_region.m` 两个半球都加载了
-   `data_aal_L.label.gii`。
-4. **cluster 之间的状态会串。** `label_index_name` 从不清空，
-   于是只匹配到一个脑区的 cluster 会继承上一个 cluster 的第二个脑区。
-5. **脑区名来自每个 `label.gii` 自己的 LabelTable**，所以模板包里的图谱全都能用，
-   而不只是配了 CSV 的那些——写死的 `+1` / `+36` / `+max(L)` 半球偏移也没有了。
-6. **`zstat` 原本是 cluster 均值而不是峰值。** 现在两者都报，名字如实，
-   另加 SD、min/max、以 mm² 计的面积，以及峰值和质心坐标。
-7. **统计量类型必须声明。** `1 - normcdf` 把输入当作 z 分数，
-   而 `surfstate.m` 喂给它的是 `slm.t`。现在 t 图必须给 `df`。
-8. **cluster 是线性时间的。** 原来把邻居入队时不检查是否已经在队里；
-   现在连通域由 `scipy.sparse.csgraph` 给出。
-9. **只匹配到一个脑区的 cluster 不再靠复制自己那一行来凑数。**
+- 接受**用户提供的 FWHM 或 resel 数**，这样你自己流程里估出来的值现在就能驱动 RFT 校正；
+- 直接接受**残差图**，供在别处拟合好模型的情况。
 
-对于有限数值的纯正向分析，新旧结果完全一致。数据里有负值或无穷值、
-或者用了 AAL 的地方会不一致——那是在修 bug，不是回归。
+[BrainStat](https://github.com/MICA-MNI/BrainStat) 是 SurfStat 的 Python 后继，
+覆盖了其中大部分内容；这里的实现会以它作为对拍基准，
+在它是更好答案的地方也可能直接封装它而不是重写。
 
-`lh/rh.neighbors_IndexStart0.txt` 仍然是默认的邻接来源。
-它们与网格拓扑对拍过，逐顶点一致（32480 个顶点 6 邻居，12 个顶点 5 邻居），
-所以 `neighbor_source: surface` 是精确的等价替换，且在任何网格密度下都成立——
-自带例子用的就是它，因此不必随包分发那 2.6 MB 的表。
+### 其他分辨率的皮层
+
+核心部分没有任何地方绑死在 32k 上。读入时顶点映射取自每个文件自己的 brain model，
+`neighbor_source: surface` 会从你指给它的任何网格上建邻接，
+`defaults.mesh` 指明用哪一套模板——所以只要提供匹配的曲面和图谱，
+换一个密度**现在就能跑**，而且随包配置里已经留好了 `"10k"` 网格的邻接表位置。
+
+计划要做的，是把「能跑」变成「好用」：
+
+- **fs_LR 164k**（每半球 163 842 顶点），也就是 HCP 的完整密度；以及用于快速迭代的低分辨率 fs_LR 网格；
+- **fsaverage5 / fsaverage6 / fsaverage**（每半球 10 242 / 40 962 / 163 842 顶点），
+  从 FreeSurfer 曲面读入，配 `.annot` 或 `label.gii` 分区；
+- **自动检测密度**，让 `defaults.mesh` 不再是一个你必须记得去设的东西；
+- **按密度组织的图谱 registry**，使 `cifti-state atlases` 列出的是你当前密度下真实存在的那些；
+- **随包的模板预设**，让换一个密度变成改一行配置，而不是满世界找文件。
+
+cluster 的复杂度对顶点数是线性的，所以 164k 大约是 32k 的五倍开销，仍然轻松；
+真正变重的是建邻接和渲染，这两件都有缓存。
+
+### 一些小项
+
+- **体素结构。** 91k 文件里的 19 个皮层下结构目前是原样带过的。
+  用同一套机制在 3D 里对它们做 cluster、出对应的报表，是很自然的延伸。
+- **为 wb_view 生成 `.spec` / `.scene`**；目前是直接传一串文件名调起来的。
+- **局部次峰。** `find_local_peaks` 已实现，但还没接进界面和 pipeline。
+- **界面里的批处理**；目前用 `cifti-state batch`。
 
 ## 目录结构
 
@@ -630,12 +670,12 @@ pytest          # 112 项；裸 clone 下会跳过 3 项（它们需要邻接表
                 # 这两样没有随包分发）
 ```
 
-不需要任何准备：依赖数据的测试——**包括 MATLAB 对拍**——默认就跑在 `example_data/` 上。
-要改用你自己的数据：
+不需要任何准备：依赖数据的测试默认就跑在 `example_data/` 上，
+其中包括与随包参考 cluster 图逐顶点对拍的回归测试。要改用你自己的数据：
 
 ```bash
 export CIFTI_STATE_TEST_CONFIG=configs/machines/<hostname>.yaml
-export CIFTI_STATE_TEST_EXAMPLES=/path/to/Example_test
+export CIFTI_STATE_TEST_EXAMPLES=/path/to/maps
 pytest
 ```
 
@@ -644,35 +684,41 @@ pytest
 用桩程序验证 `wb_command` 封装；标注与报表组装；cluster mask；
 底板的灰度与符号判定；字体解析和数字框的几道防线；
 界面的 headless 测试——包括「worker 回调必须落在 GUI 线程」这一条断言，
-所有控件更新都依赖它；以及上面那张 MATLAB 对拍表。
-
-## 还没做的
-
-- **RFT cluster 校正。** 公式不是障碍——已经用模拟验证过，
-  在场的平滑度已知时 FWE 正好是 0.05。障碍在于 SurfStat 的平滑度取自 GLM 残差，
-  而改从统计图本身估会系统性偏低（模拟中偏低 6–17%），把 FWE 推到 0.06–0.18。
-  要做就得有残差，或者由用户提供 FWHM。
-- 为 wb_view 生成 `.spec` / `.scene` 文件；目前是直接传一串文件名调起来的。
-- 局部次峰（`find_local_peaks`）已实现，但还没接进界面和 pipeline。
-- 批处理没有界面入口，用 `cifti-state batch`。
+所有控件更新都依赖它；以及上面那些回归基准。
 
 ## 示例数据
 
-`example_data/` 里有两张统计图、MATLAB 的参考输出，
+`example_data/` 里有两张统计图、各自应当得到的 cluster 图，
 以及跑通上面一切所需的最小 fs_LR 32k 模板文件，总共约 8 MB。
 每个文件是什么、第三方模板出自哪里，见
 [`example_data/README.md`](example_data/README.md)。
 
-## 致谢
+## 引用与致谢
 
-`example_data/fs_LR_32k/` 里的 fs_LR 32k 模板来自
+**模板。** `example_data/fs_LR_32k/` 里的 fs_LR 32k 文件来自
 [DiedrichsenLab/fs_LR_32](https://github.com/DiedrichsenLab/fs_LR_32)。
-曲面来自 HCP 组平均（Van Essen et al., *Cerebral Cortex* 2012），
-分区来自 Glasser et al., *Nature* 2016——使用时请引用这些工作。
-出图用的是 [surfplot](https://github.com/danjgale/surfplot) 和
+曲面来自 HCP 组平均（Van Essen DC, Glasser MF, Dierker DL, Harwell J, Coalson T.
+*Parcellations and hemispheric asymmetries of human cerebral cortex analyzed on
+surface-based atlases.* Cerebral Cortex 2012; 22:2241–2262）。
+默认分区是 Glasser MF et al. *A multi-modal parcellation of human cerebral cortex.*
+Nature 2016; 536:171–178。使用时请引用这些工作。
+
+**统计（计划中，见[路线图](#路线图)）。** Worsley KJ, Taylor JE, Carbonell F,
+Chung MK, Duerden E, Bernhardt B, Lyttelton O, Boucher M, Evans AC.
+*SurfStat: A Matlab toolbox for the statistical analysis of univariate and
+multivariate surface and volumetric data using linear mixed effects models and
+random field theory.* NeuroImage 2009; 47(Suppl 1):S102。
+校正背后的随机场理论是 Worsley KJ, Marrett S, Neelin P, Vandal AC, Friston KJ,
+Evans AC. *A unified statistical approach for determining significant signals in
+images of cerebral activation.* Human Brain Mapping 1996; 4:58–73。
+Python 后继是 [BrainStat](https://github.com/MICA-MNI/BrainStat)。
+
+**软件。** 出图用 [surfplot](https://github.com/danjgale/surfplot) 和
 [BrainSpace](https://github.com/MICA-MNI/BrainSpace)；
 交互视图用 [PyVista](https://pyvista.org/)；
-CIFTI / GIFTI 读写用 [NiBabel](https://nipy.org/nibabel/)。
+CIFTI / GIFTI 读写用 [NiBabel](https://nipy.org/nibabel/)；
+曲面操作和 `wb_view` 用
+[Connectome Workbench](https://www.humanconnectome.org/software/connectome-workbench)。
 
 ## 许可
 

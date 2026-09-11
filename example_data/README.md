@@ -8,7 +8,7 @@ no paths to fix. Total ~8 MB.
 ```
 example_data/
   example.yaml          a complete, self-contained configuration pointing here
-  maps/                 the statistic maps and the MATLAB reference outputs
+  maps/                 the statistic maps and the expected cluster maps
   fs_LR_32k/            the minimum fs_LR 32k template files (third party)
 ```
 
@@ -23,17 +23,16 @@ $env:CIFTI_STATE_CONFIG = "$PWD\example_data\example.yaml"    # PowerShell
 
 ## `maps/` — the analysis data
 
-Two group-level contrast maps and, for each, the cluster map the original
-MATLAB pipeline produced from it. The pair is what makes this a *regression*
-example rather than a demo: the Python result is compared against a known
-answer, vertex for vertex.
+Two group-level contrast maps and, for each, the cluster map that analysing it
+should produce. The pair is what makes this a *regression* fixture rather than
+a demo: the result is compared against a known answer, vertex for vertex.
 
 | File | What it is |
 |---|---|
 | `group_mean_thresh_fdr_E_C.dscalar.nii` | Group mean z map, contrast E–C, already FDR-thresholded. 91 282 greyordinates. |
-| `group_mean_thresh_fdr_E_C_cluster_extent20_thr1.039.dscalar.nii` | MATLAB's cluster label map for it: threshold 1.039, extent ≥ 20. **32 clusters** (L 15 / R 17). |
+| `group_mean_thresh_fdr_E_C_cluster_extent20_thr1.039.dscalar.nii` | The expected cluster label map for it: threshold 1.039, extent ≥ 20. **32 clusters** (L 15 / R 17). |
 | `group_mean_thresh_fdr_E_D.dscalar.nii` | Group mean z map, contrast E–D, FDR-thresholded. |
-| `group_mean_thresh_fdr_E_D_cluster_extent20_thr1.09.dscalar.nii` | MATLAB's cluster label map: threshold 1.09, extent ≥ 20. **76 clusters** (L 38 / R 38). |
+| `group_mean_thresh_fdr_E_D_cluster_extent20_thr1.09.dscalar.nii` | The expected cluster label map: threshold 1.09, extent ≥ 20. **76 clusters** (L 38 / R 38). |
 
 Both maps are in the **91k** layout (29 696 + 29 716 cortical vertices with the
 medial wall excluded, plus 19 subcortical structures). `tests/test_regression.py`
@@ -76,11 +75,11 @@ can read.
 
 ## What is *not* bundled
 
-- **`lh/rh.neighbors_IndexStart0.txt`** (2.6 MB) — the MATLAB neighbour tables.
+- **`lh/rh.neighbors_IndexStart0.txt`** (2.6 MB) — pre-computed neighbour tables.
   `example.yaml` sets `neighbor_source: surface` instead, which builds the same
   graph from the mesh. This was checked: the two adjacency matrices differ in
   **0** entries on fs_LR 32k, and both give the cluster counts above. Point
-  `resources.neighbors` at your tables if you want the original code path.
+  `resources.neighbors` at your own tables if you would rather use them.
 - **The atlas CSVs** (`Anatomical-labels-csv/`) — optional prettier region
   names. Without them the report uses the names in each atlas's own GIFTI label
   table, which is the authoritative source anyway.

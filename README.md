@@ -4,6 +4,8 @@
 
 **Cluster analysis, anatomical reporting and visualisation for fs_LR 32k cortical surfaces.**
 
+Take a statistic map on the cortical surface, find the clusters that survive a threshold, name the regions they fall in, and draw them — from the command line, from Python, or from a desktop interface, all over one shared core.
+
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#tests)
@@ -20,8 +22,7 @@
 ## What it does
 
 You have a statistic map on the fs_LR 32k surface — a z or t map from any
-package. This finds the connected clusters that survive a threshold, tells you
-which anatomical regions they fall in, and draws them.
+package. This turns it into the table and the figure you actually need.
 
 ```
 map.dscalar.nii  ──▶  threshold  ──▶  clusters  ──▶  peaks + atlas regions  ──▶  table
@@ -31,11 +32,11 @@ map.dscalar.nii  ──▶  threshold  ──▶  clusters  ──▶  peaks + a
 
 | | |
 |---|---|
-| **Reads any fs_LR CIFTI layout** | 91k, 59k and 64k all describe the same left+right 32k cortex. The vertex mapping comes from each file's own brain models, so nothing is assumed about greyordinate counts. GIFTI metric pairs too. |
-| **Reproduces the MATLAB result exactly** | `legacy_mode` gives vertex-for-vertex identical cluster maps, including the numbering. Verified in CI-style tests against reference outputs — see [MATLAB parity](#matlab-parity). |
-| **…and fixes what was wrong with it** | Negative clusters can actually be found, `-inf` no longer manufactures clusters, AAL's right hemisphere gets right-hemisphere labels. [Full list](#what-changed-from-the-matlab-version). |
-| **Region names from the atlas itself** | Each `label.gii`'s own LabelTable is the source of truth, so every atlas in the template pack works — not only the ones with a CSV. |
-| **Three ways in, one core** | `cifti-state` on the command line, `import cifti_state` in a notebook, or `cifti-state-gui`. All three call the same functions. |
+| **Reads any fs_LR CIFTI layout** | 91k, 59k and 64k all describe the same left+right 32k cortex. The vertex mapping comes from each file's own brain models, so nothing is assumed about greyordinate counts — and results are written back in the layout you gave. GIFTI metric pairs too. |
+| **Clustering that says what it did** | Positive, negative or two-sided; a minimum extent in vertices; fixed, FDR or percentile thresholds; deterministic cluster numbering. Every result carries the parameter snapshot that produced it. |
+| **Region names from the atlas itself** | Each `label.gii`'s own LabelTable is the source of truth, keyed by (hemisphere, label id) — so every atlas in the template pack works, not only the ones with a lookup table shipped alongside. |
+| **Honest peak tables** | Peak *and* mean value under their own names, plus SD, min/max, surface area in mm², peak and centroid coordinates, and the share of each cluster falling in each region. |
+| **Three ways in, one core** | `cifti-state` on the command line, `import cifti_state` in a notebook, or `cifti-state-gui`. All three call the same functions, so anything the interface can do is scriptable. |
 | **Publication figures and a live 3D view** | surfplot for the figure you export, PyVista for the one you rotate — both over the same arrays, both with the sulcal underlay. |
 | **Runs the example out of the box** | `example_data/` ships the maps *and* the minimum templates. Clone, install, run. |
 
@@ -48,7 +49,7 @@ map.dscalar.nii  ──▶  threshold  ──▶  clusters  ──▶  peaks + a
 conda create -n cifti-state python=3.11 pip -y
 conda activate cifti-state
 
-git clone https://github.com/<your-github>/cifti_state_py.git
+git clone https://github.com/LASMpsyCAS/cifti_state_py.git
 cd cifti_state_py
 
 pip install -r requirements.txt
@@ -68,7 +69,7 @@ output of every command, including a mainland-China pip mirror.
 conda create -n cifti-state python=3.11 pip -y
 conda activate cifti-state
 
-git clone https://github.com/<your-github>/cifti_state_py.git
+git clone https://github.com/LASMpsyCAS/cifti_state_py.git
 cd cifti_state_py
 
 pip install -r requirements.txt
@@ -110,7 +111,7 @@ export CIFTI_STATE_CONFIG=$PWD/example_data/example.yaml       # bash
 cifti-state check                                              # is everything in place?
 
 cifti-state run example_data/maps/group_mean_thresh_fdr_E_C.dscalar.nii \
-    --method fixed --threshold 1.039 --extent 20 --legacy \
+    --method fixed --threshold 1.039 --extent 20 \
     --atlas Glasser_2016 --render -o results/E_C
 ```
 
@@ -129,15 +130,15 @@ group_mean_thresh_fdr_E_C.dscalar: 32 clusters (L 15 / R 17)
   record           ..._cluster_extent20_thr1.039_analysis.json
 ```
 
-Those 32 clusters are the answer the MATLAB pipeline gave, and
-`example_data/maps/` contains its output so you can check:
+The expected cluster map for that command ships alongside the input, so you can
+confirm your installation reproduces it exactly:
 
 ```python
 import numpy as np, nibabel as nib
 name = "group_mean_thresh_fdr_E_C_cluster_extent20_thr1.039.dscalar.nii"
-mine      = nib.load(f"results/E_C/{name}").get_fdata().ravel()
-reference = nib.load(f"example_data/maps/{name}").get_fdata().ravel()
-np.array_equal(mine, reference)      # True — 0 differing vertices
+mine     = nib.load(f"results/E_C/{name}").get_fdata().ravel()
+expected = nib.load(f"example_data/maps/{name}").get_fdata().ravel()
+np.array_equal(mine, expected)      # True — 0 differing vertices
 ```
 
 The report:
@@ -158,18 +159,15 @@ cifti-state-gui                          # the interface
 ## Use cases
 
 <details open>
-<summary><b>1 · Reproduce a MATLAB analysis exactly</b></summary>
-
-`--legacy` pins every behavioural difference back to the original: positive
-direction only, the original infinity handling, the original FDR tail.
+<summary><b>1 · Threshold, cluster, report and draw in one command</b></summary>
 
 ```bash
-cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20 --legacy
+cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20
 ```
 
-The output file is named the way the MATLAB script named it
-(`<input>_cluster_extent<N>_thr<T>.dscalar.nii`), so it drops straight into an
-existing folder structure.
+You get the cluster label map as a `dscalar.nii` in the input's own layout, a
+per-cluster report, a peak table, a region-by-region annotation table, and a
+JSON record of the parameters. Add `--render` for the figure.
 
 </details>
 
@@ -195,8 +193,7 @@ cluster × region instead of packing the regions into a single cell.
 <summary><b>3 · A t map instead of a z map</b></summary>
 
 The statistic type must be declared, because the p-value conversion depends on
-it. A t map read as z gives overstated p-values (this was a real bug in the
-MATLAB version).
+it — a t map read as z gives overstated p-values, silently.
 
 ```bash
 cifti-state run tmap.dscalar.nii --statistic t --df 29 --method fdr --q 0.05
@@ -231,7 +228,6 @@ threshold_method: fixed
 threshold_value: 1.09
 direction: positive
 extent: 20
-legacy_mode: true
 atlas: Glasser_2016
 top_n_regions: 2
 output_dir: results/E_D
@@ -248,16 +244,39 @@ See `examples/spec_example.yaml` for every field.
 </details>
 
 <details>
-<summary><b>6 · The desktop interface</b></summary>
+<summary><b>6 · Match an analysis you have already published</b></summary>
+
+Three switches exist because the conventional choices are not the only ones,
+and an existing result may have been produced under different ones:
+
+| option | what it pins |
+|---|---|
+| `--direction positive` | only the positive tail is searched, so no negative cluster can survive |
+| `--inf-policy legacy` | `±inf` are both mapped to the largest finite value (rather than `clip`, which sends `-inf` to the smallest) |
+| `fdr_legacy_tail: true` | only values on the tested side enter the FDR calculation |
+
+`--legacy` sets the first two together:
+
+```bash
+cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20 --legacy
+```
+
+The output is named `<input>_cluster_extent<N>_thr<T>.dscalar.nii`, so it drops
+straight into an existing folder structure.
+
+</details>
+
+<details>
+<summary><b>7 · The desktop interface</b></summary>
 
 ```bash
 cifti-state-gui                                  # or: cifti-state-gui map.dscalar.nii
 ```
 
 Three steps down the left: **Data** (pick the file, declare z or t) →
-**Cluster** (threshold, direction, extent, legacy) → **Anatomical report**
-(atlas, regions per cluster, minimum share, table style). The workspace on the
-right has the preview above and the cluster table + log below.
+**Cluster** (threshold, direction, extent) → **Anatomical report** (atlas,
+regions per cluster, minimum share, table style). The workspace on the right
+has the preview above and the cluster table + log below.
 
 - Report parameters re-run **only** the annotation step. Tick *Update as I
   change these* and the table follows the controls live — no re-clustering.
@@ -277,7 +296,7 @@ report · `Ctrl+M` save mask · `Ctrl+W` wb_view.
 </details>
 
 <details>
-<summary><b>7 · Python API — the whole pipeline in eight lines</b></summary>
+<summary><b>8 · Python API — the whole pipeline in eight lines</b></summary>
 
 ```python
 from cifti_state import load_settings, run_analysis, AnalysisSpec
@@ -286,7 +305,7 @@ settings = load_settings("example_data/example.yaml")
 spec = AnalysisSpec(
     input_path="example_data/maps/group_mean_thresh_fdr_E_C.dscalar.nii",
     threshold_method="fixed", threshold_value=1.039,
-    extent=20, legacy_mode=True, atlas="Glasser_2016",
+    extent=20, atlas="Glasser_2016",
     output_dir="results/E_C", report_formats=("csv", "xlsx"), render=True,
 )
 result = run_analysis(spec, settings)
@@ -300,7 +319,7 @@ result.to_json("run.json")       # enough to reproduce this exact run
 </details>
 
 <details>
-<summary><b>8 · Python API — step by step, for when you need the pieces</b></summary>
+<summary><b>9 · Python API — step by step, for when you need the pieces</b></summary>
 
 ```python
 from cifti_state import load_settings
@@ -333,7 +352,7 @@ thr.describe(), thr.positive, thr.n_suprathreshold
 
 # 3 · cluster
 adjacency = build_adjacency(stat_map, settings, AnalysisSpec(mesh="32k"))
-clusters = find_clusters(stat_map, adjacency, thr, extent=20, legacy_mode=True)
+clusters = find_clusters(stat_map, adjacency, thr, extent=20)
 clusters.n_clusters, clusters.n_left, clusters.n_right     # (76, 38, 38)
 clusters.labels_left        # (32492,) int, 0 = no cluster
 clusters.sizes()            # {1: 114, 2: 408, 3: 707, …}
@@ -359,7 +378,7 @@ interface drives them from a worker thread.
 </details>
 
 <details>
-<summary><b>9 · Python API — figures and the 3D view</b></summary>
+<summary><b>10 · Python API — figures and the 3D view</b></summary>
 
 ```python
 from cifti_state.viz.render import render_stat_map, render_clusters, save_figure
@@ -409,7 +428,7 @@ description of how to colour them, so the same scene goes to a
 </details>
 
 <details>
-<summary><b>10 · Calling Connectome Workbench</b></summary>
+<summary><b>11 · Calling Connectome Workbench</b></summary>
 
 ```python
 from cifti_state.wb import probe, smooth_cifti, cifti_separate, open_in_wb_view
@@ -498,9 +517,15 @@ Everything downstream sees a full-mesh array plus a `present` mask, so vertex
 indices line up with the surfaces and the atlases without bookkeeping — and
 output is written back in the input's own layout.
 
-Other mesh densities (10k, 59k, 164k) work the same way given matching atlases
-and neighbour tables. A pair of `*.func.gii` metric files can be read with
-`load_surface_stat_map_from_gifti`.
+A pair of `*.func.gii` metric files can be read with
+`load_surface_stat_map_from_gifti`. Other mesh densities already work the same
+way given matching templates — see [Roadmap](#roadmap).
+
+**Adjacency** comes either from a neighbour table (`neighbor_source: txt`, one
+row per vertex) or from the surface mesh itself (`neighbor_source: surface`).
+The two give the identical graph on fs_LR 32k — checked vertex for vertex,
+32 480 vertices with 6 neighbours and 12 with 5 — and the mesh route needs no
+extra files, so it is what the bundled example uses.
 
 ## Atlases
 
@@ -512,8 +537,10 @@ cifti-state atlases --all    # including ones not in the registry
 Region names come from each `label.gii`'s own LabelTable, so **any** atlas
 following the `<name>.32k.{L,R}.label.gii` convention works — Glasser 2016,
 AAL, Yeo 7/17, Schaefer, Gordon, Power, Desikan, Destrieux, Fan, Shen,
-Baldassano, Wang, the Icosahedrons, and the rest of the pack. A CSV, where one
-is configured, is applied on top as a display-name override.
+Baldassano, Wang, the Icosahedrons, and the rest of the pack. Labels are keyed
+by `(hemisphere, label_id)`, so an atlas that reuses the same id range in both
+hemispheres is handled correctly without offsets. A CSV, where one is
+configured, is applied on top as a display-name override.
 
 ## The sulcal underlay
 
@@ -588,55 +615,82 @@ is that VTK cannot get an OpenGL context: Remote Desktop generally cannot
 provide one, and an old graphics driver may not either. The Figure tab does not
 need one.
 
-## MATLAB parity
+## Roadmap
 
-`tests/test_regression.py` asserts vertex-for-vertex equality with the
-reference cluster maps in `example_data/maps/`:
+### Vertex-wise statistics and RFT cluster correction
 
-| map | threshold | extent | MATLAB | cifti_state | differing vertices |
-|---|---|---|---|---|---|
-| `group_mean_thresh_fdr_E_C` | 1.039 | 20 | 32 (L 15 / R 17) | 32 (L 15 / R 17) | **0** |
-| `group_mean_thresh_fdr_E_D` | 1.09 | 20 | 76 (L 38 / R 38) | 76 (L 38 / R 38) | **0** |
+Today `cifti_state` starts from a statistic map you computed elsewhere. The
+next major addition is a `cifti_state.stats` module bringing the
+[SurfStat](https://www.math.mcgill.ca/keith/surfstat/) model into Python, so a
+design matrix goes in and corrected cluster inference comes out — without
+leaving the pipeline:
 
-Including the cluster numbering, which is deterministic by
-(hemisphere, sign, lowest vertex index).
+| planned | SurfStat equivalent | what it gives |
+|---|---|---|
+| model terms and a design matrix | `SurfStatLinMod` | a vertex-wise linear (and mixed-effects) model fitted across subjects |
+| contrasts | `SurfStatT`, `SurfStatF` | t and F maps, feeding straight into the clustering already here |
+| resels from the model's residuals | `SurfStatResels` | the surface's intrinsic smoothness, in resels |
+| corrected P values | `SurfStatP` | peak-level and cluster-extent P under random field theory, FWE-corrected |
+| the existing BH-FDR | `SurfStatQ` | already implemented, kept as the alternative |
 
-### What changed from the MATLAB version
+**Why the two arrive together.** RFT's cluster-extent P value depends on the
+smoothness of the underlying random field, and SurfStat takes that from the GLM
+residuals. Estimating it from a finished statistic map instead is tempting but
+biased: in simulation on this surface the smoothness came out 6–17% low, which
+pushed the realised family-wise error rate to **0.06–0.18** against a nominal
+0.05, depending on the cluster-forming threshold. Given the true smoothness the
+same code hit **0.050** exactly. So the correction is only trustworthy with the
+residuals in hand — which means the model layer comes first, and RFT ships with
+it rather than before it.
 
-Corrections, not refactors. The first four change results:
+Two things will land earlier, for people who already have what is missing:
 
-1. **Negative clusters can now be found.** `get_clusters_fsLR32k.m` masked with
-   `map .* (map > threshold)` and then searched with `threshold = 0`, so
-   sub-threshold vertices became exactly zero and no negative cluster could
-   ever survive. `direction` selects `positive` / `negative` / `two_sided`.
-2. **Symmetric infinity handling.** `map(isinf(map)) = max(...)` turned `-inf`
-   into a large *positive* value, manufacturing clusters. `inf_policy="clip"`
-   sends `+inf` to the largest finite value and `-inf` to the smallest.
-3. **AAL right-hemisphere labels were wrong.** `w_find_brain_region.m` loaded
-   `data_aal_L.label.gii` for both hemispheres.
-4. **State leaked between clusters.** `label_index_name` was never cleared, so
-   a cluster matching only one region inherited the previous cluster's second.
-5. **Region names come from each `label.gii`'s own LabelTable**, so all atlases
-   in the template pack work rather than only the ones with a CSV — and the
-   hard-wired `+1` / `+36` / `+max(L)` hemisphere offsets are gone.
-6. **`zstat` was the cluster mean, not the peak.** Both are reported under
-   honest names, plus SD, min/max, area in mm², and peak/centroid coordinates.
-7. **The statistic type must be declared.** `1 - normcdf` treats its input as a
-   z-score; `surfstate.m` fed it `slm.t`. A t map now requires `df`.
-8. **Linear-time clustering.** The original queued neighbours without checking
-   whether they were already queued; components now come from
-   `scipy.sparse.csgraph`.
-9. **Single-region clusters are no longer padded** by duplicating their row.
+- accept a **user-supplied FWHM or resel count**, so an estimate from your own
+  pipeline can drive the RFT correction now;
+- accept **residual maps** directly, for a model fitted elsewhere.
 
-For a positive-only analysis of finite data, old and new agree exactly. Where
-the data contain negative values or infinities, or where AAL was used, they
-differ — that is the bug being fixed, not a regression.
+[BrainStat](https://github.com/MICA-MNI/BrainStat) is SurfStat's Python
+successor and covers much of the same ground; it is the reference the
+implementation here will be validated against, and may end up being wrapped
+rather than reimplemented where that is the better answer.
 
-`lh/rh.neighbors_IndexStart0.txt` remain the default adjacency source. They were
-checked against the mesh topology and agree vertex for vertex (32 480 vertices
-with 6 neighbours, 12 with 5), so `neighbor_source: surface` is an exact
-drop-in that works at any mesh density — and is what the bundled example uses,
-so no 2.6 MB table has to be shipped.
+### Other surface resolutions
+
+Nothing in the core is tied to 32k. The reader takes its vertex mapping from
+each file's own brain models, `neighbor_source: surface` builds the adjacency
+from whatever mesh you point it at, and `defaults.mesh` names the set of
+templates to use — so a different density already works today if you supply
+matching surfaces and atlases, and the neighbour-table slot for a `"10k"` mesh
+is already in the shipped configuration.
+
+What is planned is to make that pleasant rather than possible:
+
+- **fs_LR 164k** (163 842 vertices per hemisphere), the full HCP density, and
+  the low-resolution fs_LR meshes used for fast iteration;
+- **fsaverage5 / fsaverage6 / fsaverage** (10 242 / 40 962 / 163 842 vertices
+  per hemisphere), read from FreeSurfer surfaces with `.annot` or
+  `label.gii` parcellations;
+- **automatic density detection** from the input file, so `defaults.mesh` stops
+  being something you have to remember to set;
+- a **per-density atlas registry**, so `cifti-state atlases` lists what actually
+  exists at the density you are working in;
+- **shipped template presets**, so a new density is a one-line configuration
+  change rather than a hunt for files.
+
+Clustering is linear in the number of vertices, so 164k costs about five times
+32k and stays comfortable; building the adjacency and rendering are the parts
+that grow, and both are cached.
+
+### Smaller items
+
+- **Volume structures.** The 19 subcortical structures in a 91k file are
+  currently carried through untouched. Clustering them in 3D, with a matching
+  report, is a natural extension of the same machinery.
+- **`.spec` / `.scene` generation for wb_view**; it is currently launched with a
+  plain file list.
+- **Sub-peaks.** `find_local_peaks` is implemented but not yet surfaced in the
+  interface or the pipeline.
+- **Batch mode in the interface**; for now use `cifti-state batch`.
 
 ## Project layout
 
@@ -668,12 +722,13 @@ pytest          # 112 tests; on a bare clone 3 skip (they need the neighbour
                 # tables and the Desikan atlas, which are not bundled)
 ```
 
-No setup: the data-backed tests, **including the MATLAB regression**, run
-against `example_data/` by default. To point them at your own copy instead:
+No setup: the data-backed tests run against `example_data/` by default,
+including the regression tests that assert vertex-for-vertex equality with the
+reference cluster maps shipped there. To point them at your own copy instead:
 
 ```bash
 export CIFTI_STATE_TEST_CONFIG=configs/machines/<hostname>.yaml
-export CIFTI_STATE_TEST_EXAMPLES=/path/to/Example_test
+export CIFTI_STATE_TEST_EXAMPLES=/path/to/maps
 pytest
 ```
 
@@ -685,40 +740,43 @@ executable; annotation and report assembly; cluster masks; the underlay's
 greyscale and its sign detection; font resolution and the numeric-field
 defences; the interface run headless — including the assertion that worker
 callbacks land on the GUI thread, which every widget update depends on; and the
-MATLAB regression above.
-
-## Not yet built
-
-- **RFT cluster correction.** The formula is not the obstacle — it was
-  validated by simulation and hits an exact 0.05 FWE rate when the field's
-  smoothness is known. The obstacle is that SurfStat takes smoothness from the
-  GLM residuals; estimating it from the statistic map instead is biased low
-  (6–17% in simulation), pushing the FWE rate to 0.06–0.18. It would need
-  either the residuals or a user-supplied FWHM.
-- Generating `.spec` / `.scene` files for wb_view; it is currently launched
-  with a plain file list.
-- Sub-peaks (`find_local_peaks`) are implemented but not surfaced in the
-  interface or the pipeline.
-- Batch mode has no interface; use `cifti-state batch`.
+regression fixtures above.
 
 ## Example data
 
-`example_data/` holds the two statistic maps, the MATLAB reference outputs, and
+`example_data/` holds two statistic maps, the expected cluster map for each, and
 the minimum fs_LR 32k template files needed to run everything above — about
 8 MB in total. See [`example_data/README.md`](example_data/README.md) for what
 each file is and where the third-party templates come from.
 
-## Acknowledgements
+## References and acknowledgements
 
-The fs_LR 32k templates bundled in `example_data/fs_LR_32k/` come from
+**Templates.** The fs_LR 32k files in `example_data/fs_LR_32k/` come from
 [DiedrichsenLab/fs_LR_32](https://github.com/DiedrichsenLab/fs_LR_32). The
-surfaces derive from the HCP group average (Van Essen et al., *Cerebral Cortex*
-2012) and the parcellation is Glasser et al., *Nature* 2016 — please cite those
-works when you use them. Figures are drawn with
+surfaces derive from the HCP group average (Van Essen DC, Glasser MF, Dierker
+DL, Harwell J, Coalson T. *Parcellations and hemispheric asymmetries of human
+cerebral cortex analyzed on surface-based atlases.* Cerebral Cortex 2012;
+22:2241–2262). The default parcellation is Glasser MF et al. *A multi-modal
+parcellation of human cerebral cortex.* Nature 2016; 536:171–178. Please cite
+those works when you use them.
+
+**Statistics (planned — see [Roadmap](#roadmap)).** Worsley KJ, Taylor JE,
+Carbonell F, Chung MK, Duerden E, Bernhardt B, Lyttelton O, Boucher M, Evans
+AC. *SurfStat: A Matlab toolbox for the statistical analysis of univariate and
+multivariate surface and volumetric data using linear mixed effects models and
+random field theory.* NeuroImage 2009; 47(Suppl 1):S102. The random field
+theory behind the correction is Worsley KJ, Marrett S, Neelin P, Vandal AC,
+Friston KJ, Evans AC. *A unified statistical approach for determining
+significant signals in images of cerebral activation.* Human Brain Mapping
+1996; 4:58–73. The Python successor is
+[BrainStat](https://github.com/MICA-MNI/BrainStat).
+
+**Software.** Figures are drawn with
 [surfplot](https://github.com/danjgale/surfplot) and
 [BrainSpace](https://github.com/MICA-MNI/BrainSpace); the interactive view uses
-[PyVista](https://pyvista.org/). CIFTI and GIFTI reading is
-[NiBabel](https://nipy.org/nibabel/).
+[PyVista](https://pyvista.org/); CIFTI and GIFTI reading is
+[NiBabel](https://nipy.org/nibabel/); surface operations and `wb_view` are
+[Connectome Workbench](https://www.humanconnectome.org/software/connectome-workbench).
 
 ## License
 
