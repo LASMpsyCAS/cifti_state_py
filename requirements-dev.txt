@@ -1,0 +1,7 @@
+# Testing on top of requirements.txt.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+pytest>=7.4
+pytest-cov>=4.1
+pytest-qt>=4.2         # only needed if you add interactive GUI tests of your own

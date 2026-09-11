@@ -1,0 +1,61 @@
+# Machine profile: example-linux-server  (TEMPLATE — copy, don't edit in place)
+#
+# On the lab server, run
+#
+#     cifti-state config --init-machine
+#
+# which writes configs/machines/<that machine's hostname>.yaml. Or copy this
+# file to configs/machines/$(hostname -s).yaml and fill in the paths.
+#
+# The filename must match the hostname, lowercased and with the domain
+# stripped:  lasm-node01.lab.example.edu  ->  lasm-node01.yaml
+# On a cluster where every node has a different hostname but the paths are
+# identical, set CIFTI_STATE_MACHINE=lasm-cluster in your shell profile and
+# name the file lasm-cluster.yaml.
+
+extends: ../settings.linux.yaml
+
+machine:
+  name: example-linux-server
+  description: Lab server template — rename to your hostname
+  notes: >
+    Headless: VTK has no display, so figure rendering must run under
+    'xvfb-run -a', or install a VTK built with OSMesa/EGL.
+
+# ---- Connectome Workbench ------------------------------------------------ #
+# Typical install locations:
+#   /usr/local/workbench/bin_linux64/wb_command
+#   /opt/workbench/bin_linux64/wb_command
+#   $HOME/workbench/bin_linux64/wb_command
+# Leave blank to fall back to whatever `which wb_command` finds.
+workbench:
+  wb_command: /usr/local/workbench/bin_linux64/wb_command
+  wb_view:    /usr/local/workbench/bin_linux64/wb_view
+
+# ---- Template pack, atlases, adjacency tables ---------------------------- #
+# Put the fs_LR_32-master folder and the neighbour tables on shared storage so
+# every user on the server points at the same copy.
+resources:
+  root:          /shared/templates/fs_LR_32-master
+  atlas_dir:     /shared/templates/fs_LR_32-master
+  atlas_csv_dir: /shared/templates/Anatomical-labels-csv
+  neighbors:
+    "32k":
+      left:  /shared/templates/neighbors/lh.neighbors_IndexStart0.txt
+      right: /shared/templates/neighbors/rh.neighbors_IndexStart0.txt
+    "10k":
+      left:  /shared/templates/neighbors/10Klh.neighbors_IndexStart0.txt
+      right: /shared/templates/neighbors/10krh.neighbors_IndexStart0.txt
+
+defaults:
+  atlas: Glasser_2016
+  extent: 20
+
+render:
+  backend: offscreen
+  dpi: 300
+
+runtime:
+  tmp_dir: /tmp/cifti_state
+  n_jobs: 8               # a server can afford more than a laptop
+  log_level: INFO

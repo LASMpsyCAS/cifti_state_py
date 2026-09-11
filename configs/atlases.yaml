@@ -1,0 +1,121 @@
+# Atlas registry.
+#
+# Region names come from each label.gii's own GIFTI LabelTable, so no CSV is
+# required.  `csv:` is an OPTIONAL display-name override: a two column file
+# (integer key, display name) with or without a header.  When `csv_scope` is
+# `merged` the keys refer to the merged left+right numbering the old MATLAB
+# code used (left ids first, then right ids offset by `csv_right_offset`);
+# when it is `per_hemi` the same keys apply to both hemispheres.
+#
+# `strip_prefix` removes a redundant hemisphere prefix that some atlases bake
+# into their label names (Glasser's "L_V1_ROI" -> "V1_ROI"), so the reporting
+# layer can add a single consistent hemisphere column instead.
+#
+# Any atlas not listed here can still be used: pass a name that matches
+# "<name>.32k.{L,R}.label.gii" in resources.atlas_dir and it is picked up by
+# the filename convention.
+
+version: 1
+
+defaults:
+  pattern: "{name}.32k.{HEMI}.label.gii"   # {HEMI} -> L / R
+  unknown_labels: ["???", "unknown", "empty", "Unknown", "L_???", "R_???", "none"]
+
+atlases:
+
+  Glasser_2016:
+    label: "Glasser 2016 (HCP-MMP1, 180/hemi)"
+    n_regions: 360
+    csv: Glasser.csv
+    csv_scope: per_hemi
+    strip_prefix: ["L_", "R_"]
+
+  Desikan:
+    label: "Desikan-Killiany (34/hemi)"
+    n_regions: 68
+    csv: Desikan.csv
+    csv_scope: merged
+    csv_left_offset: 1      # MATLAB used  L: id + 1
+    csv_right_offset: 36    #              R: id + 36
+
+  Dextrieux:
+    label: "Destrieux (74/hemi)  [file name keeps the original misspelling]"
+    aliases: ["Destrieux"]
+    n_regions: 148
+    csv: Dextrieux.csv
+    csv_scope: merged
+
+  AAL:
+    label: "AAL"
+    n_regions: 116
+    csv: AAL.csv
+    csv_scope: per_hemi
+
+  data_aal:
+    label: "AAL2 (data_aal)"
+    pattern: "data_aal_{HEMI}.label.gii"
+    csv: AAL2_Atlas_Labels.csv
+    csv_scope: per_hemi
+
+  Yeo_JNeurophysiol11_7Networks:
+    label: "Yeo 2011, 7 networks"
+    aliases: ["Yeo7", "Yeo-7"]
+    n_regions: 7
+    csv: Yeo-7.csv
+    csv_scope: per_hemi
+
+  Yeo_JNeurophysiol11_17Networks:
+    label: "Yeo 2011, 17 networks"
+    aliases: ["Yeo17", "Yeo-17"]
+    n_regions: 17
+    csv: Yeo-17.csv
+    csv_scope: per_hemi
+
+  Fan_2016:
+    label: "Brainnetome (Fan 2016)"
+    n_regions: 210
+
+  Gordon:
+    label: "Gordon 2016 parcels"
+
+  Power2011:
+    label: "Power 2011"
+
+  Shen:
+    label: "Shen 268"
+
+  Wang2015:
+    label: "Wang 2015 visual topography"
+
+  Baldassano:
+    label: "Baldassano scene areas"
+
+  BA_handArea:
+    label: "Brodmann hand area"
+
+  cortex_ColeAnticevic_NetPartition_GlasserParcels:
+    label: "Cole-Anticevic network partition (Glasser parcels)"
+    aliases: ["ColeAnticevic", "CAB-NP"]
+    pattern: "cortex_ColeAnticevic_NetPartition_GlasserParcels_{HEMI}.label.gii"
+
+  # Schaefer: every granularity present in the template pack.
+  Schaefer2018_7Networks_100:  { label: "Schaefer 2018, 7 networks, 100 parcels" }
+  Schaefer2018_7Networks_200:  { label: "Schaefer 2018, 7 networks, 200 parcels" }
+  Schaefer2018_7Networks_300:  { label: "Schaefer 2018, 7 networks, 300 parcels" }
+  Schaefer2018_7Networks_400:  { label: "Schaefer 2018, 7 networks, 400 parcels" }
+  Schaefer2018_7Networks_500:  { label: "Schaefer 2018, 7 networks, 500 parcels" }
+  Schaefer2018_7Networks_600:  { label: "Schaefer 2018, 7 networks, 600 parcels" }
+  Schaefer2018_7Networks_700:  { label: "Schaefer 2018, 7 networks, 700 parcels" }
+  Schaefer2018_7Networks_800:  { label: "Schaefer 2018, 7 networks, 800 parcels" }
+  Schaefer2018_7Networks_900:  { label: "Schaefer 2018, 7 networks, 900 parcels" }
+  Schaefer2018_7Networks_1000: { label: "Schaefer 2018, 7 networks, 1000 parcels" }
+  Schaefer2018_17Networks_100:  { label: "Schaefer 2018, 17 networks, 100 parcels" }
+  Schaefer2018_17Networks_200:  { label: "Schaefer 2018, 17 networks, 200 parcels" }
+  Schaefer2018_17Networks_300:  { label: "Schaefer 2018, 17 networks, 300 parcels" }
+  Schaefer2018_17Networks_400:  { label: "Schaefer 2018, 17 networks, 400 parcels" }
+  Schaefer2018_17Networks_500:  { label: "Schaefer 2018, 17 networks, 500 parcels" }
+  Schaefer2018_17Networks_600:  { label: "Schaefer 2018, 17 networks, 600 parcels" }
+  Schaefer2018_17Networks_700:  { label: "Schaefer 2018, 17 networks, 700 parcels" }
+  Schaefer2018_17Networks_800:  { label: "Schaefer 2018, 17 networks, 800 parcels" }
+  Schaefer2018_17Networks_900:  { label: "Schaefer 2018, 17 networks, 900 parcels" }
+  Schaefer2018_17Networks_1000: { label: "Schaefer 2018, 17 networks, 1000 parcels" }

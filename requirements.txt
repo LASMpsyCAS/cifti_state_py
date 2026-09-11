@@ -1,0 +1,30 @@
+# Everything cifti_state needs at runtime, installed with pip.
+#
+#   pip install -r requirements.txt
+#
+# Lower bounds only -- these are the versions the package was written against.
+# Upper bounds are deliberately absent so a newer wheel is used when available.
+
+# -- analysis --------------------------------------------------------------- #
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+nibabel>=5.0
+PyYAML>=6.0
+
+# -- reporting -------------------------------------------------------------- #
+openpyxl>=3.1          # .xlsx export
+tabulate>=0.9          # .md export (pandas.DataFrame.to_markdown)
+
+# -- visualisation ---------------------------------------------------------- #
+matplotlib>=3.7
+vtk>=9.2               # ~100 MB wheel; the largest download here
+brainspace>=0.1.10
+surfplot>=0.2
+
+# -- interactive 3D --------------------------------------------------------- #
+pyvista>=0.43          # the rotatable 3D surface view
+pyvistaqt>=0.11        # embeds it in the Qt window
+
+# -- interface -------------------------------------------------------------- #
+PySide6>=6.5           # ~100 MB wheel

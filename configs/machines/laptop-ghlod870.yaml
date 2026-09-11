@@ -1,0 +1,54 @@
+# Machine profile: laptop-ghlod870  (gw's Windows laptop)
+#
+# Picked up automatically on this machine — the hostname resolves to
+# "laptop-ghlod870", which is this file's name. Nothing needs to be passed on
+# the command line.
+#
+# Only the machine-specific paths live here; everything else (defaults,
+# render settings, surface file names) comes from settings.windows.yaml via
+# 'extends'. A key left blank inherits the parent's value rather than clearing
+# it, so you can delete lines you do not need to change.
+#
+# Verify with:  cifti-state check --workbench --render
+
+extends: ../settings.windows.yaml
+
+machine:
+  name: laptop-ghlod870
+  description: Windows laptop (Connectome Workbench 1.5.0)
+  notes: >
+    Data normally lives on the RaiDrive SFTP mount (Z:). Working copies are
+    kept on D: because the network drive is slow and cannot be memory-mapped.
+
+# ---- Connectome Workbench ------------------------------------------------ #
+workbench:
+  wb_command: D:/workbench-windows64-v1.5.0/workbench/bin_windows64/wb_command.exe
+  wb_view:    D:/workbench-windows64-v1.5.0/workbench/bin_windows64/wb_view.exe
+
+# ---- Template pack, atlases, adjacency tables ---------------------------- #
+resources:
+  root:          D:/Code_renew/Cifti_state/fs_LR_32-master
+  atlas_dir:     D:/Code_renew/Cifti_state/fs_LR_32-master
+  atlas_csv_dir: D:/Code_renew/Cifti_state/Anatomical-labels-csv
+  neighbors:
+    "32k":
+      left:  D:/Code_renew/Cifti_state/lh.neighbors_IndexStart0.txt
+      right: D:/Code_renew/Cifti_state/rh.neighbors_IndexStart0.txt
+    "10k":
+      left:  D:/Code_renew/Cifti_state/10Klh.neighbors_IndexStart0.txt
+      right: D:/Code_renew/Cifti_state/10krh.neighbors_IndexStart0.txt
+
+# ---- Analysis defaults for this machine ---------------------------------- #
+# Override only what you want different from settings.windows.yaml.
+defaults:
+  atlas: Glasser_2016
+  extent: 20
+
+render:
+  backend: offscreen      # a laptop GPU handles this directly; no xvfb needed
+  dpi: 300
+
+runtime:
+  tmp_dir: D:/Code_renew/cifti_state_py/.tmp
+  n_jobs: 4
+  log_level: INFO

@@ -1,0 +1,22 @@
+# A bare Python environment. Nothing else.
+#
+#   conda env create -f environment.yml
+#   conda activate cifti-state
+#   pip install -r requirements.txt
+#   pip install -e .
+#
+# Solving a full scientific stack in conda is slow, so conda's only job here is
+# to give us an isolated interpreter; every package comes from pip, which
+# resolves in seconds. See docs/INSTALL.md for the complete walkthrough.
+#
+# Equivalent one-liner if you prefer not to use this file:
+#   conda create -n cifti-state python=3.11 pip -y
+
+name: cifti-state
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.11
+  - pip

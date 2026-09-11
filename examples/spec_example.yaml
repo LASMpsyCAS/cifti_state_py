@@ -1,0 +1,60 @@
+# An analysis spec. Every field maps one-to-one onto AnalysisSpec, which is
+# also what the GUI will bind its widgets to -- so anything the interface can
+# do is scriptable, and vice versa.
+#
+#   cifti-state run --spec examples/spec_example.yaml
+
+# ---- input --------------------------------------------------------------- #
+# A CIFTI file in any of the three layouts (91k greyordinates, 59k cortex-only,
+# 64k dense surface). Alternatively give input_left + input_right for a pair of
+# *.func.gii metric files.
+input_path: example_data/maps/group_mean_thresh_fdr_E_C.dscalar.nii
+column: 0
+
+# What the values in the map are. 'z' assumes standard normal; 't' additionally
+# needs df. Getting this wrong silently mis-states every FDR p-value, which is
+# why it has to be declared rather than guessed.
+statistic: z
+df:
+
+# Value written into vertices the file does not cover (the medial wall in 91k
+# and 59k files). 0.0 matches cifti-matlab.
+fill: 0.0
+
+# ---- threshold ----------------------------------------------------------- #
+threshold_method: fixed        # fixed | fdr | percentile
+threshold_value: 1.039         # for 'fixed'
+fdr_q: 0.05                    # for 'fdr'
+fdr_legacy_tail: true          # only values on the tested side enter the FDR
+percentile: 95.0               # for 'percentile'
+direction: positive            # positive | negative | two_sided
+
+# ---- clustering ---------------------------------------------------------- #
+extent: 20                     # minimum cluster size in vertices
+mesh: "32k"
+neighbor_source: surface       # txt | surface -- txt falls back to
+                               # surface when no tables are configured
+inf_policy: clip               # clip | legacy | nan
+
+# legacy_mode forces direction=positive and inf_policy=legacy, reproducing the
+# original MATLAB result bit for bit. Turn it off to allow negative clusters
+# and symmetric infinity handling.
+legacy_mode: true
+
+# ---- annotation ---------------------------------------------------------- #
+atlas: Glasser_2016            # see: cifti-state atlases
+top_n_regions: 2               # 0 reports every contributing region
+min_region_percent: 0.0
+geometry_surface: midthickness # used for cluster area and peak coordinates
+
+# ---- output -------------------------------------------------------------- #
+output_dir: results/E_C
+output_prefix:                 # defaults to the input file stem
+report_style: wide             # wide | long | legacy
+report_formats: [csv, xlsx]
+write_cluster_map: true
+
+render: true
+render_surface: inflated
+render_layout: grid_4          # grid_4 | row_4 | grid_8 | dorsal_ventral | left_only | right_only | flat
+render_format: png
