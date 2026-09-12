@@ -153,6 +153,7 @@ def run_analysis(
     check_cancelled(cancel)
     stat_map = load_input(spec)
     description = stat_map.describe()
+    _resolve_mesh(spec, settings, stat_map, warnings)
 
     # 2. adjacency ---------------------------------------------------------- #
     report_progress(progress, 0.10, "loading vertex adjacency")
@@ -209,7 +210,9 @@ def run_analysis(
     # 6. annotation --------------------------------------------------------- #
     report_progress(progress, 0.72, "annotating against atlas")
     check_cancelled(cancel)
-    atlas = load_atlas(spec.atlas, settings, registry=load_registry())
+    atlas = load_atlas(
+        spec.atlas, settings, registry=load_registry(), mesh=spec.mesh
+    )
     _check_atlas_mesh(atlas, stat_map, warnings)
     annotations = annotate_clusters(
         clusters,
@@ -336,6 +339,57 @@ def _write_outputs(
     result.outputs["record"] = record_path
 
 
+def _resolve_mesh(spec: AnalysisSpec, settings: Settings, stat_map, warnings: list[str]) -> None:
+    """Settle which mesh this map is on, and write it back onto the spec.
+
+    The map itself is the evidence: its hemispheres carry a vertex count, and
+    that names a mesh -- except when it does not, because fs_LR 10k and
+    fsaverage5 both have 10242 vertices and fs_LR 164k and fsaverage both have
+    163842.  ``defaults.mesh`` (or ``--mesh``) breaks those ties, which is why
+    it stays a setting rather than becoming pure detection.
+
+    Everything downstream -- adjacency, geometry, the atlas -- then reads
+    ``spec.mesh``, so a 10k or fsaverage5 input runs the whole pipeline at its
+    own density instead of being rejected for not being 32k.
+    """
+    from .mesh.spaces import MeshError, parse_mesh
+
+    n_left = stat_map.left.n_vertices
+    try:
+        configured = parse_mesh(spec.mesh)
+    except MeshError:
+        configured = None
+
+    if configured is not None and configured.n_vertices == n_left:
+        spec.mesh = configured.name
+        return
+
+    try:
+        detected = settings.mesh_of(n_left)
+    except MeshError as exc:
+        # An unrecognised density is not fatal: the surface-derived adjacency
+        # works on any mesh, so say what is unknown and carry on.
+        message = (
+            f"the map has {n_left} vertices per hemisphere, which matches no "
+            f"known mesh ({exc}). Adjacency and geometry will be taken from "
+            f"whatever surfaces the configuration names."
+        )
+        log.warning(message)
+        warnings.append(message)
+        return
+
+    if configured is not None:
+        message = (
+            f"the map is on {detected.name} ({n_left} vertices per hemisphere) "
+            f"but the configuration says {configured.name}; using {detected.name}"
+        )
+        log.info("%s", message)
+        warnings.append(message)
+    else:
+        log.info("input is on %s", detected.describe())
+    spec.mesh = detected.name
+
+
 def _geometry_surfaces(
     settings: Settings, spec: AnalysisSpec, stat_map, warnings: list[str]
 ):
@@ -343,7 +397,7 @@ def _geometry_surfaces(
     try:
         surfaces = {
             hemi: load_surface(
-                settings.resources.surface_path(hemi, spec.geometry_surface),
+                settings.surface_for(hemi, spec.geometry_surface, mesh=spec.mesh),
                 hemisphere=hemi,
                 kind=spec.geometry_surface,
             )

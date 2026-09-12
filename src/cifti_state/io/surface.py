@@ -67,13 +67,20 @@ def load_surface(
 
 
 def load_hemisphere_surfaces(
-    settings: Settings, kind: Optional[str] = None
+    settings: Settings, kind: Optional[str] = None, *, mesh: Optional[str] = None
 ) -> dict[str, Surface]:
-    """Load the left and right template surfaces of a given kind."""
+    """Load the left and right template surfaces of a given kind.
+
+    *mesh* names which density to load -- ``"fsLR:10k"``, ``"fsaverage5"``, or
+    ``None`` for the configured working mesh.  Resolution goes through
+    :meth:`cifti_state.config.Settings.surface_for`, so the explicit
+    ``resources.surfaces`` block still wins for the working mesh and every
+    other density is found by its standard filename.
+    """
     kind = kind or settings.render.surface
     out = {}
     for hemi in ("left", "right"):
-        path = settings.resources.surface_path(hemi, kind)
+        path = settings.surface_for(hemi, kind, mesh=mesh)
         out[hemi] = _load_cached(str(path), hemi, kind)
     return out
 

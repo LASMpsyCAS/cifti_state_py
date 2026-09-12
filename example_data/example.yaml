@@ -30,6 +30,16 @@ resources:
   root: fs_LR_32k
   atlas_dir: fs_LR_32k
 
+  # Where the mesh template packs live. Everything a conversion needs -- the
+  # registration spheres, the average vertex-area metrics, the medial-wall
+  # masks, the anatomical surfaces -- is found inside these by its standard
+  # HCP / FreeSurfer filename, so no file has to be named here individually.
+  #   cifti-state meshes            # what was found
+  #   cifti-state meshes --routes   # what can be converted to what
+  # Leaving this out searches the resources root and its sibling directories,
+  # which finds the same three here; it is spelled out to show the mechanism.
+  mesh_dirs: [fs_LR_32k, 10k, resample_fsaverage]
+
   surfaces:
     left:
       midthickness: fs_LR.32k.L.midthickness.surf.gii

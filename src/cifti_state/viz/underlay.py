@@ -117,6 +117,9 @@ def load_underlay(
         log.warning("underlay %r not found at %s", name, path)
         return None
 
+    if n_vertices is not None:
+        path = _underlay_on_mesh(path, settings, n_vertices, name) or path
+
     try:
         values = _load_values(str(path))
     except Exception as exc:
@@ -143,6 +146,50 @@ def load_underlay(
 
     log.info("underlay %s (%s) from %s", name, style, path.name)
     return Underlay(left=left, right=right, name=name, style=style, source=path)
+
+
+def _underlay_on_mesh(
+    path: Path, settings: Settings, n_vertices: tuple[int, int], name: str
+) -> Optional[Path]:
+    """The underlay on the mesh the data is on, resampling and caching if needed.
+
+    The folding pattern is shipped on fs_LR 32k, but a figure drawn at another
+    density needs it there.  Losing the sulci is a visible downgrade -- a flat
+    grey brain reads as a different, worse figure -- so this converts rather
+    than gives up.  Failure is still not fatal: the caller falls back to no
+    underlay, which is what happened before.
+    """
+    from ..io.cifti import load_surface_stat_map
+
+    try:
+        source_left = load_surface_stat_map(
+            str(path), statistic="other", fill=0.0
+        ).left.n_vertices
+    except Exception as exc:
+        log.debug("could not inspect the underlay %s: %s", path.name, exc)
+        return None
+    if source_left == int(n_vertices[0]):
+        return path
+
+    try:
+        from ..mesh.resample import resample_cifti
+        from ..mesh.spaces import identify_mesh
+
+        target = identify_mesh(int(n_vertices[0]), prefer=settings.defaults.mesh)
+        cache_dir = settings.temp_dir() / "underlays"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        out_path = cache_dir / f"{path.stem}.{target.name.replace(':', '_')}.dscalar.nii"
+        if out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime:
+            return out_path
+        log.info("resampling the %s underlay to %s", name, target.name)
+        resample_cifti(path, out_path, target, settings)
+        return out_path
+    except Exception as exc:
+        log.warning(
+            "underlay %r is on a %d-vertex mesh and could not be resampled to "
+            "%d (%s); drawing without it", name, source_left, n_vertices[0], exc,
+        )
+        return None
 
 
 @lru_cache(maxsize=8)

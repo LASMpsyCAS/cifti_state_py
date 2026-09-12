@@ -54,7 +54,7 @@ def load_neighbors(
         path = settings.resources.neighbor_path(mesh, hemisphere)
         return _cached_txt(str(path), n_vertices)
     if source == "surface":
-        path = settings.resources.surface_path(hemisphere, "midthickness")
+        path = settings.surface_for(hemisphere, "midthickness", mesh=mesh)
         return _cached_surface(str(path))
     raise ValueError(f"unknown neighbor source {source!r}; use 'txt' or 'surface'")
 

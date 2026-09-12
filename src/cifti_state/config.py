@@ -197,7 +197,18 @@ class WorkbenchSettings:
 
 @dataclass
 class ResourceSettings:
-    """Template surfaces, neighbour tables and atlases."""
+    """Template surfaces, neighbour tables and atlases.
+
+    ``surfaces`` names the surfaces of the *working* mesh explicitly -- the one
+    ``defaults.mesh`` points at, and the only one most analyses ever touch.
+    Every other mesh is found by convention instead: ``mesh_dirs`` lists the
+    directories holding template packs, and
+    :class:`cifti_state.mesh.MeshLibrary` recognises the standard HCP and
+    FreeSurfer filenames inside them.  That keeps a configuration file short
+    while still letting a study work at several densities;
+    ``mesh_files`` is the escape hatch for a file whose name does not follow
+    the conventions.
+    """
 
     root: Optional[Path] = None
     surfaces: dict[str, dict[str, str]] = field(default_factory=dict)
@@ -205,6 +216,11 @@ class ResourceSettings:
     underlays: dict[str, str] = field(default_factory=dict)
     atlas_dir: Optional[Path] = None
     atlas_csv_dir: Optional[Path] = None
+    #: Directories to search for mesh templates (spheres, area metrics, ROIs,
+    #: anatomical surfaces). Empty means "root and its siblings".
+    mesh_dirs: list[Path] = field(default_factory=list)
+    #: ``{mesh: {role: {hemi: path}}}`` overrides for oddly-named files.
+    mesh_files: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def surface_path(self, hemi: str, kind: str) -> Path:
         """Absolute path of a template surface, e.g. ``("left", "inflated")``."""
@@ -231,16 +247,22 @@ class ResourceSettings:
         return self._resolve(filename)
 
     def neighbor_path(self, mesh: str, hemi: str) -> Path:
-        """Absolute path of a neighbour table, e.g. ``("32k", "left")``."""
+        """Absolute path of a neighbour table, e.g. ``("32k", "left")``.
+
+        Configuration files have always keyed these by a bare density
+        (``"32k"``), while the pipeline now names meshes in full
+        (``"fsLR:32k"``).  Both spellings are accepted, so no existing
+        configuration has to change.
+        """
         hemi = _normalise_hemi(hemi)
-        try:
-            name = self.neighbors[str(mesh)][hemi]
-        except KeyError as exc:
-            raise ConfigError(
-                f"no neighbour table for mesh {mesh!r} hemisphere {hemi!r}; "
-                f"configured meshes: {sorted(self.neighbors)}"
-            ) from exc
-        return self._resolve(name)
+        for key in _mesh_keys(mesh):
+            entry = self.neighbors.get(key)
+            if entry and hemi in entry:
+                return self._resolve(entry[hemi])
+        raise ConfigError(
+            f"no neighbour table for mesh {mesh!r} hemisphere {hemi!r}; "
+            f"configured meshes: {sorted(self.neighbors)}"
+        )
 
     def _resolve(self, name: str) -> Path:
         p = Path(name)
@@ -365,6 +387,22 @@ class Settings:
             },
             atlas_dir=_opt_path(res_raw.get("atlas_dir"), base),
             atlas_csv_dir=_opt_path(res_raw.get("atlas_csv_dir"), base),
+            mesh_dirs=[
+                p for p in (
+                    _opt_path(d, base) for d in (res_raw.get("mesh_dirs") or [])
+                ) if p is not None
+            ],
+            mesh_files={
+                str(mesh): {
+                    str(role): (
+                        {_normalise_hemi(hk): str(_opt_path(hv, base))
+                         for hk, hv in value.items() if hv}
+                        if isinstance(value, Mapping) else str(_opt_path(value, base))
+                    )
+                    for role, value in (roles or {}).items() if value
+                }
+                for mesh, roles in (res_raw.get("mesh_files") or {}).items()
+            },
         )
         if resources.atlas_dir is None:
             resources.atlas_dir = resources.root
@@ -552,6 +590,70 @@ class Settings:
         d = self.runtime.tmp_dir or Path(tempfile.gettempdir()) / "cifti_state"
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    # -- meshes ------------------------------------------------------------- #
+
+    def mesh_library(self):
+        """The template files found for every mesh, built once and cached.
+
+        Imported lazily: :mod:`cifti_state.mesh` reaches back into this module
+        through :mod:`cifti_state.wb`, and a module-level import here would
+        close that loop.
+        """
+        library = getattr(self, "_mesh_library", None)
+        if library is None:
+            from .mesh.templates import MeshLibrary
+
+            library = MeshLibrary.from_settings(self)
+            object.__setattr__(self, "_mesh_library", library)
+        return library
+
+    def mesh_of(self, n_vertices: int):
+        """Which mesh a hemisphere of *n_vertices* vertices is on.
+
+        ``defaults.mesh`` breaks the ties -- 10242 vertices is both fs_LR 10k
+        and fsaverage5, and the configured working mesh is the best evidence
+        available about which family the study is in.
+        """
+        from .mesh.spaces import identify_mesh
+
+        return identify_mesh(n_vertices, prefer=self.defaults.mesh)
+
+    def surface_for(
+        self, hemi: str, kind: str, mesh: Optional[str] = None
+    ) -> Path:
+        """A template surface, for the working mesh or any other.
+
+        ``resources.surfaces`` names the working mesh's surfaces explicitly and
+        wins whenever it applies, so an existing configuration keeps behaving
+        exactly as it did.  Any other mesh is resolved through
+        :class:`~cifti_state.mesh.MeshLibrary`, which finds the standard HCP
+        and FreeSurfer filenames in ``resources.mesh_dirs`` -- so working at a
+        second density costs a directory, not a second surfaces block.
+        """
+        from .mesh.spaces import MeshError, parse_mesh
+
+        hemi = _normalise_hemi(hemi)
+        explicit_applies = True
+        if mesh is not None:
+            try:
+                explicit_applies = parse_mesh(mesh) == parse_mesh(self.defaults.mesh)
+            except MeshError:
+                explicit_applies = str(mesh) == str(self.defaults.mesh)
+
+        if explicit_applies and kind in self.resources.surfaces.get(hemi, {}):
+            return self.resources.surface_path(hemi, kind)
+
+        try:
+            files = self.mesh_library().files_for(mesh or self.defaults.mesh)
+            return files.surface(hemi, kind)
+        except Exception as exc:
+            if kind in self.resources.surfaces.get(hemi, {}):
+                return self.resources.surface_path(hemi, kind)
+            raise ConfigError(
+                f"no {kind} surface for the {hemi} hemisphere of mesh "
+                f"{mesh or self.defaults.mesh!r}.\n{exc}"
+            ) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -750,6 +852,21 @@ _HEMI_ALIASES = {
     "l": "left", "lh": "left", "left": "left", "cortex_left": "left",
     "r": "right", "rh": "right", "right": "right", "cortex_right": "right",
 }
+
+
+def _mesh_keys(mesh: str) -> list[str]:
+    """Every spelling of *mesh* a configuration file might have used."""
+    keys = [str(mesh)]
+    try:
+        from .mesh.spaces import parse_mesh
+
+        space = parse_mesh(mesh)
+    except Exception:
+        return keys
+    for candidate in (space.name, space.density, *space.aliases):
+        if candidate not in keys:
+            keys.append(candidate)
+    return keys
 
 
 def _normalise_hemi(value: str) -> str:

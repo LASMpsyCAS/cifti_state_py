@@ -5,6 +5,9 @@
     cifti-state run MAP.dscalar.nii ...    # one analysis
     cifti-state run --spec spec.yaml       # the same, from a file
     cifti-state batch 'maps/*.dscalar.nii' # many maps, one parameter set
+    cifti-state stats participants.csv ... # a group t-test, corrected
+    cifti-state meshes                     # what surface meshes are available
+    cifti-state resample IN --to fsLR:10k  # move a map to another mesh
 
 Everything goes through :func:`cifti_state.pipeline.run_analysis`, the same
 entry point a GUI uses.
@@ -69,6 +72,56 @@ def build_parser() -> argparse.ArgumentParser:
     atlases.add_argument("--all", action="store_true",
                          help="include atlases not in the registry")
 
+    # -- meshes -------------------------------------------------------------- #
+    meshes = sub.add_parser(
+        "meshes",
+        help="which surface meshes are known, and which have their templates",
+    )
+    meshes.add_argument("--routes", action="store_true",
+                        help="also show which conversions are possible")
+
+    # -- resample ------------------------------------------------------------ #
+    resample = sub.add_parser(
+        "resample",
+        help="move a CIFTI file onto another surface mesh",
+    )
+    resample.add_argument("input", type=Path, help="dscalar/dtseries/dlabel file")
+    resample.add_argument("--to", dest="target", required=True,
+                          help="target mesh: fsLR:10k, fsaverage5, 32k, ...")
+    resample.add_argument("--from", dest="source",
+                          help="source mesh; read from the file unless the "
+                               "vertex count is ambiguous (10242 is both "
+                               "fsLR:10k and fsaverage5)")
+    resample.add_argument("-o", "--output", type=Path,
+                          help="output file (default: alongside the input)")
+    resample.add_argument("--via", action="append", default=[],
+                          help="force an intermediate mesh; may be repeated")
+    resample.add_argument("--method", default="ADAP_BARY_AREA",
+                          choices=["ADAP_BARY_AREA", "BARYCENTRIC"])
+    resample.add_argument("--nan", default="propagate",
+                          choices=["propagate", "mask"],
+                          help="'mask' treats NaN as absent data instead of "
+                               "letting it spread; use it for thresholded maps")
+    resample.add_argument("--coverage", type=float, default=0.5,
+                          help="fraction of a target vertex that must be real "
+                               "data for it to keep a value (default 0.5)")
+    resample.add_argument("--continuous", action="store_true",
+                          help="treat integer-valued data as measurements; by "
+                               "default a map of whole numbers with few levels "
+                               "is resampled as a parcellation (largest label "
+                               "wins) rather than averaged")
+    resample.add_argument("--discrete", action="store_true",
+                          help="force the parcellation path even when the "
+                               "values do not look like labels")
+    resample.add_argument("--medial-wall", default="auto",
+                          choices=["auto", "exclude", "include"])
+    resample.add_argument("--no-roi", action="store_true",
+                          help="do not pass the medial wall as -current-roi; "
+                               "reproduces a pipeline that skipped this step")
+    resample.add_argument("--backend", default="wb", choices=["wb", "neuromaps"])
+    resample.add_argument("--print-commands", action="store_true",
+                          help="print the wb_command lines that were run")
+
     # -- config ------------------------------------------------------------- #
     cfg = sub.add_parser("config", help="inspect or create configuration files")
     cfg.add_argument("--show-chain", action="store_true",
@@ -91,6 +144,54 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--left", type=Path, help="left GIFTI metric (instead of CIFTI)")
     run.add_argument("--right", type=Path, help="right GIFTI metric")
     _add_analysis_args(run)
+
+    # -- stats -------------------------------------------------------------- #
+    stats = sub.add_parser(
+        "stats",
+        help="group t-test across subjects, with FWE cluster correction",
+    )
+    stats.add_argument("participants", type=Path,
+                       help="CSV/TSV with one row per scan and a column of file paths")
+    stats.add_argument("--test", required=True,
+                       choices=["one-sample", "two-sample", "paired"])
+    g = stats.add_argument_group("model")
+    g.add_argument("--group", dest="group_column",
+                   help="column holding the group labels (two-sample)")
+    g.add_argument("--groups", nargs=2, metavar=("A", "B"),
+                   help="which two labels to compare; the contrast is B - A")
+    g.add_argument("--condition", dest="condition_column",
+                   help="column holding the two conditions (paired)")
+    g.add_argument("--subject", dest="subject_column",
+                   help="column pairing the rows together (paired)")
+    g.add_argument("--covariate", dest="covariates", action="append", default=[],
+                   help="nuisance column; may be given more than once")
+    g.add_argument("--file-column", help="column holding the paths (guessed by default)")
+    g.add_argument("--variance", choices=["pooled", "welch"], default="pooled")
+
+    g = stats.add_argument_group("correction")
+    g.add_argument("--cluster-forming", type=float, default=3.1,
+                   help="the height clusters are formed at (default 3.1)")
+    g.add_argument("--permutations", type=int, default=0,
+                   help="permutations for the second correction (0 = skip)")
+    g.add_argument("--seed", type=int, default=0)
+    g.add_argument("--no-rft", action="store_true",
+                   help="skip the smoothness estimate and the RFT correction")
+    g.add_argument("--surface", default="midthickness",
+                   help="geometry used for smoothness and adjacency")
+
+    g = stats.add_argument_group("threshold-free cluster enhancement")
+    g.add_argument("--tfce", action="store_true",
+                   help="also score TFCE; needs --permutations to become a test")
+    g.add_argument("--tfce-2d", action="store_true",
+                   help="PALM's -tfce2D preset (H=2, E=1), suggested for surfaces")
+    g.add_argument("--tfce-H", dest="tfce_h", type=float, default=None,
+                   help="height exponent (PALM default 2)")
+    g.add_argument("--tfce-E", dest="tfce_e", type=float, default=None,
+                   help="extent exponent (PALM default 0.5, -tfce2D uses 1)")
+    g.add_argument("--tfce-dh", type=float, default=None,
+                   help="fixed step height; the default is max/100 per map")
+
+    _add_analysis_args(stats)
 
     # -- batch -------------------------------------------------------------- #
     batch = sub.add_parser("batch", help="analyse many maps with one parameter set")
@@ -167,9 +268,115 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _cmd_config(args, settings)
     if args.command == "run":
         return _cmd_run(args, settings)
+    if args.command == "stats":
+        return _cmd_stats(args, settings)
     if args.command == "batch":
         return _cmd_batch(args, settings)
+    if args.command == "meshes":
+        return _cmd_meshes(args, settings)
+    if args.command == "resample":
+        return _cmd_resample(args, settings)
     return 1
+
+
+def _cmd_meshes(args, settings) -> int:
+    """What meshes exist, which have templates here, and what can convert."""
+    from .mesh import MeshLibrary, list_meshes, plan_route
+    from .mesh.spaces import MeshError
+
+    library = MeshLibrary.from_settings(settings)
+    print("=== known meshes ============================================")
+    print(f"{'mesh':<12} {'vertices/hemi':>13}  family      note")
+    for space in list_meshes():
+        print(
+            f"{space.name:<12} {space.n_vertices:>13}  {space.family:<10}  "
+            f"{space.note}"
+        )
+    print()
+    print(library.report())
+
+    available = library.available()
+    if not available:
+        print(
+            "\nNo mesh has both a sphere and an area metric here, so nothing "
+            "can be resampled. Add the directories holding your template packs "
+            "to resources.mesh_dirs."
+        )
+        return 0
+    if args.routes:
+        print("\n=== conversions =============================================")
+        for source in available:
+            for target in available:
+                if source == target:
+                    continue
+                try:
+                    steps = plan_route(source, target, library)
+                except MeshError:
+                    continue
+                route = " -> ".join([source.name] + [s.target.name for s in steps])
+                note = "" if len(steps) == 1 else "   (two hops)"
+                print(f"  {route}{note}")
+    return 0
+
+
+def _cmd_resample(args, settings) -> int:
+    """Move one CIFTI file onto another mesh."""
+    from .mesh import MeshLibrary, parse_mesh, resample_cifti
+    from .mesh.spaces import MeshError
+
+    if not args.input.exists():
+        print(f"error: {args.input} does not exist", file=sys.stderr)
+        return 2
+
+    try:
+        target = parse_mesh(args.target)
+    except MeshError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    output = args.output
+    if output is None:
+        stem = args.input.name
+        for suffix in (".dscalar.nii", ".dtseries.nii", ".dlabel.nii", ".nii"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        else:
+            suffix = args.input.suffix
+        tag = target.name.replace(":", "-")
+        output = args.input.parent / f"{stem}_{tag}{suffix}"
+
+    try:
+        result = resample_cifti(
+            args.input, output, target, settings,
+            source=args.source,
+            library=MeshLibrary.from_settings(settings),
+            method=args.method,
+            use_roi=not args.no_roi,
+            medial_wall=args.medial_wall,
+            nan=args.nan,
+            coverage=args.coverage,
+            discrete=True if args.discrete else (False if args.continuous else "auto"),
+            via=args.via or None,
+            backend=args.backend,
+            progress=_terminal_progress(),
+        )
+    except Exception as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        log.exception("the resampling failed")
+        return 1
+
+    print()
+    print(result.describe())
+    print(f"  output  {result.output}")
+    for message in result.warnings:
+        print(f"  warning: {message}")
+    if args.print_commands:
+        print("\nthe commands that were run:")
+        for command in result.commands:
+            print(f"  wb_command {command.split(' ', 1)[1]}"
+                  if command.startswith("/") else f"  {command}")
+    return 0
 
 
 def _cmd_check(args, settings) -> int:
@@ -221,6 +428,16 @@ def _cmd_check(args, settings) -> int:
                 print(f"{label:<{width}}: !  {exc}")
                 continue
             print(f"{label:<{width}}: {_exists_mark(path)} {path}")
+
+    try:
+        library = settings.mesh_library()
+        available = library.available()
+        names = ", ".join(m.name for m in available) or "none"
+        print(f"{'meshes':<{width}}: {names}")
+        if len(available) > 1:
+            print(f"{'':<{width}}  (cifti-state meshes --routes lists the conversions)")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"{'meshes':<{width}}: !  {exc}")
 
     problems = settings.validate(require_workbench=args.workbench)
     advisories = settings.advisories()
@@ -468,6 +685,138 @@ def _cmd_run(args, settings) -> int:
     for key, path in result.outputs.items():
         print(f"  {key:<16} {path}")
     for message in result.warnings:
+        print(f"  warning: {message}")
+    return 0
+
+
+def _cmd_stats(args, settings) -> int:
+    """Fit a group t-test, then cluster and correct its statistic map."""
+    from .core.cluster import find_clusters
+    from .core.threshold import compute_threshold
+    from .io.cifti import save_like
+    from .pipeline import build_adjacency
+    from .stats import (
+        PALM_2D, PALM_DEFAULT, TFCESettings,
+        load_participants, one_sample_t, paired_t, two_sample_t,
+    )
+
+    if args.output_dir is None:
+        print("error: -o/--output-dir is required", file=sys.stderr)
+        return 2
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    people = load_participants(args.participants, file_column=args.file_column)
+
+    want_tfce = bool(args.tfce or args.tfce_2d or args.tfce_h or args.tfce_e)
+    base = PALM_2D if args.tfce_2d else PALM_DEFAULT
+    tfce_settings = TFCESettings(
+        height=base.height if args.tfce_h is None else args.tfce_h,
+        extent=base.extent if args.tfce_e is None else args.tfce_e,
+        dh=0.0 if args.tfce_dh is None else args.tfce_dh,
+    ) if want_tfce else None
+
+    shared = dict(
+        settings=settings,
+        covariates=args.covariates,
+        surface=args.surface,
+        smoothness=not args.no_rft,
+        permutations=args.permutations,
+        cluster_forming=args.cluster_forming,
+        extent=args.extent if args.extent is not None else settings.defaults.extent,
+        direction=args.direction or "two_sided",
+        tfce=want_tfce,
+        tfce_settings=tfce_settings,
+        seed=args.seed,
+        column=args.column,
+        progress=_terminal_progress(),
+    )
+
+    try:
+        if args.test == "one-sample":
+            analysis = one_sample_t(people, **shared)
+        elif args.test == "two-sample":
+            if not args.group_column:
+                print("error: --group is required for a two-sample test", file=sys.stderr)
+                return 2
+            analysis = two_sample_t(
+                people, groups=args.groups, variance=args.variance,
+                group_column=args.group_column, **shared,
+            )
+        else:
+            if not (args.condition_column and args.subject_column):
+                print("error: --condition and --subject are required for a "
+                      "paired test", file=sys.stderr)
+                return 2
+            analysis = paired_t(
+                people, condition_column=args.condition_column,
+                subject_column=args.subject_column, **shared,
+            )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        log.exception("the group test failed")
+        return 1
+
+    print()
+    print(analysis.summary())
+
+    prefix = args.output_prefix or f"{args.test.replace('-', '_')}"
+    stat_map = analysis.stat_map
+    stat_path = out_dir / f"{prefix}_{stat_map.statistic}.dscalar.nii"
+    save_like(stat_path, stat_map.left.values, stat_map.right.values,
+              stat_map.template, map_name=stat_map.name)
+
+    # Cluster the statistic map at the height the correction was set up for.
+    extent = shared["extent"]
+    threshold = compute_threshold(
+        stat_map.finite_values(), method="fixed", value=args.cluster_forming,
+        direction=shared["direction"], statistic=stat_map.statistic,
+        df=stat_map.df,
+    )
+    spec = _spec_from_args(args, settings, input_path=stat_path)
+    spec.statistic = stat_map.statistic
+    spec.df = stat_map.df
+    adjacency = build_adjacency(stat_map, settings, spec)
+    clusters = find_clusters(
+        stat_map, adjacency, threshold, extent=extent,
+        direction=shared["direction"], legacy_mode=False,
+    )
+    corrected = analysis.correct_clusters(clusters, cluster_forming=args.cluster_forming)
+
+    outputs = {"statistic_map": stat_path}
+    if analysis.tfce is not None:
+        tfce_map = analysis.tfce_stat_map()
+        tfce_path = out_dir / f"{prefix}_tfce.dscalar.nii"
+        save_like(tfce_path, tfce_map.left.values, tfce_map.right.values,
+                  tfce_map.template, map_name=tfce_map.name)
+        outputs["tfce_map"] = tfce_path
+        if analysis.tfce_p is not None:
+            p_map = analysis.tfce_pmap()
+            p_path = out_dir / f"{prefix}_tfce_p.dscalar.nii"
+            save_like(p_path, p_map.left.values, p_map.right.values,
+                      p_map.template, map_name=p_map.name)
+            outputs["tfce_pvalues"] = p_path
+    if clusters.n_clusters:
+        correction_path = out_dir / f"{prefix}_clusters_corrected.csv"
+        corrected.to_csv(correction_path, index=False, encoding="utf-8-sig")
+        outputs["corrected_clusters"] = correction_path
+    record = out_dir / f"{prefix}_stats.json"
+    analysis.to_json(record)
+    outputs["record"] = record
+
+    print()
+    print(f"{clusters.n_clusters} clusters at {stat_map.statistic} > "
+          f"{args.cluster_forming:g}, extent >= {extent}")
+    if clusters.n_clusters:
+        columns = [c for c in corrected.columns if c.startswith("p_") or c in
+                   ("cluster_id", "hemi", "size_vertices", "size_resels",
+                    "peak_t", "peak_tfce")]
+        print(corrected[columns].head(15).to_string(index=False))
+        if len(corrected) > 15:
+            print(f"... and {len(corrected) - 15} more")
+    for key, path in outputs.items():
+        print(f"  {key:<20} {path}")
+    for message in analysis.warnings:
         print(f"  warning: {message}")
     return 0
 

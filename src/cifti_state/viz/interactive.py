@@ -294,6 +294,17 @@ def build_scene(
     layers: list[SurfaceLayer] = []
     values: dict[str, np.ndarray] = {}
 
+    # Which mesh the data is on decides both the surfaces to drape it over and
+    # the density the folding underlay has to be resampled to.
+    reference = stat_map if stat_map is not None else clusters
+    n_left = _n_left(reference)
+    mesh = None
+    if n_left is not None:
+        try:
+            mesh = settings.mesh_of(n_left).name
+        except Exception:
+            mesh = None
+
     from .underlay import load_underlay
 
     shading = load_underlay(
@@ -301,10 +312,11 @@ def build_scene(
         underlay,
         dark=settings.render.underlay_dark,
         light=settings.render.underlay_light,
+        n_vertices=None if n_left is None else (n_left, n_left),
     )
 
     for hemi in hemispheres:
-        path = settings.resources.surface_path(hemi, kind)
+        path = settings.surface_for(hemi, kind, mesh=mesh)
         mesh_surface = load_surface(path, hemisphere=hemi, kind=kind)
         values[hemi] = _values_for(hemi, stat_map, clusters, mode)
         if mesh_surface.n_vertices != values[hemi].size:
@@ -387,6 +399,20 @@ def build_scene(
         discrete=discrete,
         view=view,
     )
+
+
+def _n_left(reference) -> Optional[int]:
+    """Left-hemisphere vertex count of a stat map or a cluster result."""
+    for attribute in ("left", "labels_left"):
+        value = getattr(reference, attribute, None)
+        if value is None:
+            continue
+        size = getattr(value, "n_vertices", None)
+        if size is None:
+            size = getattr(value, "size", None)
+        if size:
+            return int(size)
+    return None
 
 
 def _values_for(hemi, stat_map, clusters, mode) -> np.ndarray:

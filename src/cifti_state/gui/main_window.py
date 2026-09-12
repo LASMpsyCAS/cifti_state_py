@@ -378,7 +378,10 @@ class MainWindow(QMainWindow):
             adjacency = build_adjacency(stat_map, settings, spec)
             report_progress(progress, 0.8, "loading template surfaces")
             try:
-                surfaces = load_hemisphere_surfaces(settings, "midthickness")
+                surfaces = load_hemisphere_surfaces(
+                    settings, "midthickness",
+                    mesh=_mesh_name(settings, self.state.stat_map),
+                )
             except Exception as exc:
                 log.warning("template surfaces unavailable: %s", exc)
                 surfaces = None
@@ -813,8 +816,13 @@ class MainWindow(QMainWindow):
         for hemi in ("left", "right"):
             for kind in (self.preview_panel.surface_kind(), "midthickness"):
                 try:
-                    surface = settings.resources.surface_path(hemi, kind)
-                except ConfigError:
+                    surface = settings.surface_for(
+                        hemi, kind,
+                        mesh=settings.mesh_of(
+                            self.state.stat_map.left.n_vertices
+                        ).name if self.state.stat_map else None,
+                    )
+                except Exception:
                     continue
                 if surface.exists() and surface not in files:
                     files.append(surface)
@@ -997,6 +1005,16 @@ class MainWindow(QMainWindow):
         # VTK holds a native render window; let it go before Qt tears down.
         self.preview_panel.close_plotter()
         super().closeEvent(event)
+
+
+def _mesh_name(settings, stat_map):
+    """Which mesh the loaded map is on, or ``None`` to use the configured one."""
+    if stat_map is None:
+        return None
+    try:
+        return settings.mesh_of(stat_map.left.n_vertices).name
+    except Exception:
+        return None
 
 
 def _scaled(progress, start: float, end: float):

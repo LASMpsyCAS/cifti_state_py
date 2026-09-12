@@ -122,7 +122,7 @@ def render_stat_map(
 
     layout_obj = _as_layout(layout or settings.render.layout)
     surface_kind = surface or settings.render.surface
-    surf_paths = _surface_paths(settings, surface_kind, layout_obj)
+    surf_paths = _surface_paths(settings, surface_kind, layout_obj, _mesh_of(settings, stat_map))
 
     left = np.array(stat_map.left.values, dtype=float, copy=True)
     right = np.array(stat_map.right.values, dtype=float, copy=True)
@@ -161,7 +161,7 @@ def render_stat_map(
         zoom=layout_obj.zoom or settings.render.zoom,
         background=background,
     )
-    _add_underlay(plot, settings, layout_obj, underlay)
+    _add_underlay(plot, settings, layout_obj, underlay, stat_map.left.n_vertices)
     plot.add_layer(
         data,
         cmap=cmaps.get_colormap(cmap_name),
@@ -210,7 +210,10 @@ def render_clusters(
     check_cancelled(cancel)
 
     layout_obj = _as_layout(layout or settings.render.layout)
-    surf_paths = _surface_paths(settings, surface or settings.render.surface, layout_obj)
+    surf_paths = _surface_paths(
+        settings, surface or settings.render.surface, layout_obj,
+        _mesh_of(settings, clusters),
+    )
 
     data = _stack(
         clusters.labels_left.astype(float),
@@ -229,7 +232,7 @@ def render_clusters(
         size=layout_obj.size or settings.render.size,
         zoom=layout_obj.zoom or settings.render.zoom,
     )
-    _add_underlay(plot, settings, layout_obj, underlay)
+    _add_underlay(plot, settings, layout_obj, underlay, _n_left(clusters))
     plot.add_layer(
         data,
         cmap=cmaps.cluster_colormap(n),
@@ -256,7 +259,10 @@ def render_atlas(
     """Render an atlas parcellation, by default as boundaries."""
     Plot = _require_surfplot()
     layout_obj = _as_layout(layout or settings.render.layout)
-    surf_paths = _surface_paths(settings, surface or settings.render.surface, layout_obj)
+    surf_paths = _surface_paths(
+        settings, surface or settings.render.surface, layout_obj,
+        _mesh_of(settings, atlas),
+    )
 
     data = _stack(
         atlas.left.labels.astype(float), atlas.right.labels.astype(float), layout_obj
@@ -317,15 +323,44 @@ def _as_layout(layout: str | Layout) -> Layout:
 
 
 def _surface_paths(
-    settings: Settings, kind: str, layout: Layout
+    settings: Settings, kind: str, layout: Layout, mesh: "Optional[str]" = None
 ) -> dict[str, str]:
+    """The surfaces to draw on, for whichever mesh the data is on."""
     paths: dict[str, str] = {}
     for hemi in layout.hemispheres:
-        paths[hemi] = str(settings.resources.surface_path(hemi, kind))
+        paths[hemi] = str(settings.surface_for(hemi, kind, mesh=mesh))
     return paths
 
 
-def _add_underlay(plot, settings, layout: Layout, name=None) -> bool:
+def _n_left(data) -> "Optional[int]":
+    """Left-hemisphere vertex count of a stat map, an atlas or a cluster result."""
+    for attribute in ("left", "labels_left"):
+        value = getattr(data, attribute, None)
+        if value is None:
+            continue
+        size = getattr(value, "n_vertices", None) or getattr(value, "size", None)
+        if size:
+            return int(size)
+    return None
+
+
+def _mesh_of(settings: Settings, data) -> "Optional[str]":
+    """Name the mesh a map, atlas or cluster result is on.
+
+    ``None`` when it cannot be told, which is not an error here: a wrong guess
+    costs a wrong-looking picture and never a wrong number, so drawing falls
+    back to the configured surfaces rather than stopping.
+    """
+    n_left = _n_left(data)
+    if n_left is None:
+        return None
+    try:
+        return settings.mesh_of(n_left).name
+    except Exception:
+        return None
+
+
+def _add_underlay(plot, settings, layout: Layout, name=None, n_left=None) -> bool:
     """Put the greyscale folding pattern down before anything else.
 
     surfplot composites layers in the order they are added, so this has to be
@@ -340,6 +375,7 @@ def _add_underlay(plot, settings, layout: Layout, name=None) -> bool:
         name,
         dark=settings.render.underlay_dark,
         light=settings.render.underlay_light,
+        n_vertices=None if n_left is None else (n_left, n_left),
     )
     if shading is None:
         return False

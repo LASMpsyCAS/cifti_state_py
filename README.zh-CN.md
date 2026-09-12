@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen.svg)](#测试)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#安装)
 
 [English](README.md) · [中文](README.zh-CN.md)
@@ -33,9 +33,11 @@ map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 
 | | |
 |---|---|
 | **三种 fs_LR CIFTI 布局都能读** | 91k、59k、64k 说的都是同一套左右 32k 皮层。顶点映射从每个文件自己的 brain model 里读，不对灰坐标总数做任何假设——写回时也用你给的那种布局。GIFTI 半球对也支持。 |
+| **不止一种分辨率** | fs_LR 10k 和 fsaverage5 能在自己的密度上跑完整个流程——邻接、面积、图谱、出图；`cifti-state resample` 通过 `wb_command` 在网格之间搬数据，球面配对、面积度量、内侧壁排除一样不落。 |
 | **交代得清楚的 cluster** | 正向、负向、双向；以顶点数计的最小 extent；固定值、FDR、百分位三种阈值；编号是确定性的。每个结果都携带产生它的那份参数快照。 |
 | **脑区名来自图谱本身** | 每个 `label.gii` 自带的 LabelTable 就是权威来源，按（半球，label id）索引——所以模板包里的图谱全都能用，不只是额外配了查找表的那几个。 |
 | **老实的峰值表** | 峰值**和**均值各用各的名字，另加 SD、min/max、以 mm² 计的面积、峰值与质心坐标，以及每个 cluster 落在每个脑区的占比。 |
+| **组水平统计，带校正** | 跨被试的单样本、双样本、配对 t 检验，可带协变量——然后在整个皮层上做族系错误率校正：随机场理论、置换检验和 TFCE **三套都给**，可以互相对照。TFCE 与 PALM 一致到机器精度。 |
 | **三个入口，一套核心** | 命令行 `cifti-state`、notebook 里 `import cifti_state`、界面 `cifti-state-gui`，调的是同一批函数——界面能做的事都能写成脚本。 |
 | **能出版的图 + 能转的 3D** | surfplot 负责导出的静态图，PyVista 负责可旋转的交互视图——同一批数组，都带沟回底板。 |
 | **clone 完就能跑例子** | `example_data/` 里既有数据也有最小模板文件。克隆、安装、直接跑。 |
@@ -195,7 +197,29 @@ cifti-state run tmap.dscalar.nii --statistic t --df 29 --method fdr --q 0.05
 </details>
 
 <details>
-<summary><b>4 · 一批图，一套参数</b></summary>
+<summary><b>4 · 输入不在 fs_LR 32k 上</b></summary>
+
+什么都不用设：密度是从文件里读的，整个流程就在那个密度上跑——
+邻接、cluster 面积、图谱、出图。
+
+```bash
+cifti-state run zmap_10k.dscalar.nii --method fixed --threshold 1.039 --extent 5
+```
+
+如果是要在网格之间搬数据：
+
+```bash
+cifti-state meshes                                  # 本机上有什么
+cifti-state resample zmap.dscalar.nii --to fsaverage5 --nan mask
+```
+
+详见[在别的分辨率上工作](#在别的分辨率上工作)，
+完整参考在 [`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md)。
+
+</details>
+
+<details>
+<summary><b>5 · 一批图，一套参数</b></summary>
 
 ```bash
 cifti-state batch "derivatives/*/stats/*_zstat.dscalar.nii" \
@@ -208,7 +232,7 @@ cifti-state batch "derivatives/*/stats/*_zstat.dscalar.nii" \
 </details>
 
 <details>
-<summary><b>5 · 把一次运行记录下来，以便重跑</b></summary>
+<summary><b>6 · 把一次运行记录下来，以便重跑</b></summary>
 
 每次分析都会写出 `*_analysis.json`，里面是完整的参数集；分析也可以直接由 spec 文件驱动：
 
@@ -236,7 +260,7 @@ cifti-state run --spec analysis.yaml
 </details>
 
 <details>
-<summary><b>6 · 对齐一份已经发表过的分析</b></summary>
+<summary><b>7 · 对齐一份已经发表过的分析</b></summary>
 
 有三个开关，是因为常规选择并不是唯一的选择，而一份既有结果可能是在别的选择下做出来的：
 
@@ -257,7 +281,47 @@ cifti-state run map.dscalar.nii --method fixed --threshold 1.09 --extent 20 --le
 </details>
 
 <details>
-<summary><b>7 · 桌面界面</b></summary>
+<summary><b>8 · 跨被试比较两组，在整个皮层上做校正</b></summary>
+
+用一个 CSV 描述这项研究——每次扫描一行，一列放文件路径，其余列随便写：
+
+```csv
+subject,group,age,sex,file
+sub-01,patient,34,M,maps/sub-01_thickness.dscalar.nii
+sub-02,control,29,F,maps/sub-02_thickness.dscalar.nii
+...
+```
+
+```bash
+cifti-state stats participants.csv --test two-sample --group group \
+    --covariate age --covariate sex \
+    --cluster-forming 3.1 --extent 20 \
+    --permutations 5000 -o results/patients_vs_controls
+```
+
+```
+two_sample: 28 observations, intercept + group[b] + age  [contrast: b - a, df=25]
+  59412 vertices tested
+  |t| max 5.848
+  59412 vertices -> 608.0 resels (EC 2, FWHM 13.67 mm)
+  peak FWE 0.05 at 5.750
+  permutation peak FWE 0.05 at 5.699
+
+8 clusters at t > 3.1, extent >= 20
+ cluster_id hemi  size_vertices  size_resels   peak_t  p_rft_cluster  p_rft_peak  p_perm_cluster  p_perm_peak
+          2    L            211         2.21     5.85         0.0021      0.0403          0.0040       0.0319
+          5    R             53         0.88     5.05         0.2388      0.2330          0.6607       0.2176
+          6    R             43         0.48     4.04         0.7712      1.0000          0.8044       0.8683
+```
+
+种进去的 blob 是 cluster 2，其余都是噪声，两套校正对此看法一致。
+`--test one-sample` 和 `--test paired`（配 `--condition` 和 `--subject`）用同一套选项。
+每一列是什么意思、该信哪一列，见[组水平统计](#组水平统计)。
+
+</details>
+
+<details>
+<summary><b>9 · 桌面界面</b></summary>
 
 ```bash
 cifti-state-gui                                  # 或：cifti-state-gui map.dscalar.nii
@@ -281,7 +345,7 @@ cifti-state-gui                                  # 或：cifti-state-gui map.dsc
 </details>
 
 <details>
-<summary><b>8 · Python 接口——八行跑完整个流程</b></summary>
+<summary><b>10 · Python 接口——八行跑完整个流程</b></summary>
 
 ```python
 from cifti_state import load_settings, run_analysis, AnalysisSpec
@@ -304,7 +368,7 @@ result.to_json("run.json")       # 足以复现这次运行
 </details>
 
 <details>
-<summary><b>9 · Python 接口——需要拆开用的时候</b></summary>
+<summary><b>11 · Python 接口——需要拆开用的时候</b></summary>
 
 ```python
 from cifti_state import load_settings
@@ -362,7 +426,7 @@ save_like("clusters_3_7_12.dscalar.nii", left, right, stat_map.template,
 </details>
 
 <details>
-<summary><b>10 · Python 接口——出图与 3D</b></summary>
+<summary><b>12 · Python 接口——出图与 3D</b></summary>
 
 ```python
 from cifti_state.viz.render import render_stat_map, render_clusters, save_figure
@@ -411,7 +475,7 @@ plotter.show()
 </details>
 
 <details>
-<summary><b>11 · 调用 Connectome Workbench</b></summary>
+<summary><b>13 · 调用 Connectome Workbench</b></summary>
 
 ```python
 from cifti_state.wb import probe, smooth_cifti, cifti_separate, open_in_wb_view
@@ -517,6 +581,235 @@ Schaefer、Gordon、Power、Desikan、Destrieux、Fan、Shen、Baldassano、Wang
 所以两个半球复用同一段 id 的图谱不需要任何偏移就能正确处理。
 配了 CSV 的，CSV 作为显示名覆盖叠在上面。
 
+## 组水平统计
+
+前面所有内容的起点，都是别人已经算好的统计图。这一部分负责把它算出来——
+跨被试的顶点级模型——然后告诉你其中有多少经得起整个皮层范围的校正。
+
+### 描述这项研究
+
+一个 CSV 或 TSV，每次扫描一行，一列放该次扫描的图的路径，其余列随便写。
+相对路径按表自己所在的目录解析，所以整个研究目录可以随便搬，不用改任何东西。
+
+```csv
+subject,group,condition,age,sex,file
+sub-01,patient,pre,34,M,maps/sub-01_pre.dscalar.nii
+sub-01,patient,post,34,M,maps/sub-01_post.dscalar.nii
+sub-02,control,pre,29,F,maps/sub-02_pre.dscalar.nii
+...
+```
+
+### 三种检验
+
+| 检验 | 问什么 | 行是怎么用的 |
+|---|---|---|
+| `--test one-sample` | 均值图是否不等于零？ | 每一行是一个观测 |
+| `--test two-sample --group G` | 两个独立组是否有差异？ | 按 `G` 分组；对比是**后者减前者**，谁是前者谁是后者会打印出来，不交给字母序去碰运气 |
+| `--test paired --condition C --subject S` | 同一批被试的两次测量是否有差异？ | 按 `S` 配对；数据变成差值，模型就是对差值做单样本检验 |
+
+`--covariate age --covariate sex` 加入协变量。连续协变量会**去均值**
+（于是单样本的截距意思是「平均年龄处的均值」，而不是「年龄为零时的值」）；
+分类协变量做哑变量编码。实际拟合的模型会回报给你：
+
+```
+two_sample: 28 observations, intercept + group[b] + age  [contrast: b - a, df=25]
+  - covariate age mean-centred at 32.5
+  - group sizes: a n=14, b n=14
+```
+
+双样本可以用 `--variance welch` 去掉等方差假设。此时自由度逐顶点变化，
+所以校正前会把图转成 z——这件事会写在结果里，不会偷偷做掉。
+
+### 有多少是真的：三套校正
+
+两者都控制整个皮层范围的族系错误率。它们依赖的假设不同，
+所以两套都跑、再互相对照，是你能买到的最便宜的信心。
+
+**随机场理论**先测这个场有多平滑——从模型的**残差**来测，
+因为残差是整个分析里唯一纯粹是噪声的东西——再问：
+这么平滑的一张零假设图，会冒出什么样的东西。计量单位是 resel，
+即一个 FWHM 见方的小块：
+
+```
+59412 vertices -> 608.0 resels (EC 2, FWHM 13.67 mm)
+peak FWE 0.05 at 5.437
+```
+
+**置换检验**换一条路：在零假设下重排数据。
+单样本和配对用符号翻转，双样本用打乱分组标签，
+并用 Freedman–Lane 残差化让协变量结构在重排中存活下来。
+它对分布和平滑度都不作假设。被试足够少时会穷举所有重排，检验就是精确的。
+
+```bash
+--permutations 5000        # 整个皮层上大约每千次一分钟
+```
+
+于是每个 cluster 最多拿到五个 P 值，它们回答的是不同的问题：
+
+| 列 | 层级 | 含义 |
+|---|---|---|
+| `p_rft_peak` | 峰值级 | 这个 cluster 的最高顶点，校正后——是关于**那个顶点**的证据 |
+| `p_perm_peak` | 峰值级 | 同上，来自置换的最大统计量零分布 |
+| `p_rft_cluster` | cluster 级 | 这个 cluster 以 resel 计的范围，校正后 |
+| `p_perm_cluster` | cluster 级 | 同上，来自置换的最大范围零分布 |
+| `p_tfce` | 顶点级 | 这个 cluster 里 TFCE 最高的那个顶点，校正后——见下 |
+
+cluster 级证据允许你说「这一团里有事情发生」，绝不允许说「这个顶点显著」。
+峰值级证据反过来。
+
+### TFCE：不必再挑阈值
+
+上面每一个数都依赖成簇阈值，而换个阈值答案就会变：
+阈值低偏向大而弥散的效应，阈值高偏向局灶的峰，
+而对一个你还没看到的效应，没有任何东西能告诉你哪个才对。
+无阈值成簇增强（TFCE）的办法是把所有阈值都积分掉。每个顶点的得分是
+
+```
+TFCE(v) = ∫ e(h)^E · h^H dh
+```
+
+其中 `e(h)` 是在高度 *h* 上包含顶点 *v* 的那个超阈值 cluster 的范围。
+一个顶点因为「站得高」（`h^H`）得分，也因为「属于一大片」（`e(h)^E`）得分，
+所以又矮又宽的一片和又高又窄的一根都有可能胜出。
+在皮层面上，这里的范围是**以 mm² 计的面积**，不是顶点个数——
+网格疏密不均，绝不能让恰好剖分得更密的区域白占便宜。
+
+```bash
+--tfce            # PALM 的默认值，H=2 E=0.5
+--tfce-2d         # PALM 的 -tfce2D，H=2 E=1，它的文档对面数据建议用这个
+--tfce-H 2 --tfce-E 1 --tfce-dh 0.1     # 或者自己定
+```
+
+TFCE 自己没有零分布，所以只有配合 `--permutations` 才能成为检验；
+不带置换而要 TFCE，你会拿到那张图，外加一句警告说它是拿来看的、不是检验。
+输出多两个文件——得分图，以及一整张逐顶点的 FWE 校正 P 值图，
+里面从头到尾没有任何成簇阈值：
+
+```
+  TFCE (H=2, E=1, dh=auto (max/100)): 4 vertices at corrected P<=0.05
+
+ cluster_id hemi  size_vertices  peak_t  p_rft_cluster  p_perm_cluster   peak_tfce  p_tfce
+          2    L             81   4.043          0.029           0.064     7300.57   0.050
+          3    L             50   4.693          0.250           0.486     3761.96   0.706
+          1    L             49   4.954          0.382           0.512     2366.29   0.982
+          4    L             22   3.661          0.697           0.984     1944.61   0.998
+```
+
+注意 cluster 1：四个里峰最高的那个，按 TFCE 只排第三。
+光靠高度没能把它抬起来——这正是这个统计量该有的样子。
+
+**与 PALM 的一致性。** 这是对 `palm_tfce.m` 的重新实现，
+而且是拿真家伙对拍的，不是照着描述写的：
+PALM 那个函数在 GNU Octave 里跑了四套网格——大小不同、有掩膜和无掩膜、
+三组 H 和 E——两边一致到 **1e-15 相对误差**，也就是机器精度。
+这些参考向量已经随仓库提交（`tests/data/palm_tfce_reference.npz`），
+对拍就在普通测试里跑。哪些细节必须对上，写在
+`cifti_state/stats/tfce.py` 里，连同那一处有意的偏离：
+PALM 也接受固定的 `-tfce_dh`，但它的皮层面分支从来没给最后要乘的那个 `dh` 赋值，
+所以那条路在 PALM 自己里就会报错；这里的 `--tfce-dh`
+是照 PALM **体数据**分支的做法实现的。
+
+在 fs_LR 32k 皮层上每张图约 0.2 秒——也就是每千次重排约 3.5 分钟，
+这是在置换循环本身之外的开销。
+
+### 它们校准得怎么样？
+
+是测出来的，不是假设的。零数据平滑到 fs_LR 32k 上约 11 mm FWHM，
+单样本检验，成簇阈值 3.1，名义族系错误率 0.05：
+
+| 校正 | 实测 FWE | |
+|---|---|---|
+| RFT 峰值级 | **0.040** ± 0.017 | 与承诺一致 |
+| 置换 峰值级 | **0.042** ± 0.036 | 与承诺一致 |
+| 置换 cluster 范围 | **0.058** ± 0.042 | 与承诺一致 |
+| RFT cluster 范围 | **0.158** ± 0.032 | 偏松 |
+| RFT cluster 范围，高斯闭式解 | 0.206 ± 0.035 | 更糟——所以它不是默认 |
+
+（RFT 那几行是 n=28 跑 500 次重复，置换那两行是 n=24 跑 120 次重复 × 200 次重排；
+± 是对模拟本身的 95% 区间。用 `examples/make_example_study.py --effect 0`
+加你自己的循环就能复现。）
+
+峰值级和置换的结果都是该有的样子。RFT 的 cluster 范围不是，
+而中间量说明了原因：cluster 的**数量**期望值准到几个百分点以内
+（实测 9.71，预测 9.39），但真实 cluster 比理论预期大 25–35%，
+因为过阈值的顶点更容易落在这个场恰好局部更粗糙的地方。
+这是参数化 cluster 范围推断的已知局限（Eklund, Nichols & Knutsson 2016），
+不是这里的实现缺陷——这些公式与 SurfStat 的对拍精度约为千分之一，
+直接拿 [BrainStat](https://github.com/MICA-MNI/BrainStat) 核对过。
+
+TFCE 是单独测的，为了让 200 次零假设重复 × 500 次重排跑得起来，
+搜索区域小一些（40 × 40 的格点，FWHM 4，n=16，名义 0.05，± 是对模拟本身的 95% 区间）：
+
+| 校正 | 实测 FWE | |
+|---|---|---|
+| TFCE，H=2 E=0.5（PALM 默认） | **0.030** ± 0.030 | 与承诺一致 |
+| TFCE，H=2 E=1（`--tfce-2d`） | **0.035** ± 0.030 | 与承诺一致 |
+| 置换 峰值级 | 0.050 ± 0.030 | 同一次运行，作参照 |
+| 置换 cluster 范围 | 0.045 ± 0.030 | 同一次运行，作参照 |
+
+**所以：峰值级 RFT 可以放心报；cluster 级结论请以置换或 TFCE 的 P 值为准。**
+不带 `--permutations` 跑 `cifti-state stats` 时，它也会这么警告你。
+
+### 从 Python 调用
+
+```python
+from cifti_state import load_settings
+from cifti_state.stats import load_participants, two_sample_t
+
+settings = load_settings()
+people = load_participants("study/participants.csv")
+
+analysis = two_sample_t(
+    people, settings, "group",
+    covariates=["age", "sex"],
+    permutations=5000, cluster_forming=3.1, extent=20,
+    tfce=True,             # 或者 tfce_settings=PALM_2D，即 H=2、E=1
+)
+print(analysis.summary())
+
+analysis.stat_map          # 一个普通的 SurfaceStatMap——可以 cluster、出报表、出图
+analysis.smoothness        # resels、以 mm 计的 FWHM、逐顶点 resel 密度
+analysis.random_field      # RFT 下的峰值和 cluster P 值
+analysis.permutation       # 最大统计量、最大范围和最大 TFCE 的零分布
+analysis.tfce              # TFCE 得分，逐顶点一个值
+analysis.tfce_p            # 逐顶点的 FWE 校正 P 值，全程没有任何阈值
+analysis.tfce_stat_map()   # 这两张都能变成 SurfaceStatMap，直接拿去画
+analysis.to_json("run.json")
+```
+
+统计图就是一个普通的
+[`SurfaceStatMap`](#输入格式)，所以 cluster、脑区报表、出图和界面都能直接拿去用，
+不需要知道它是从哪来的：
+
+```python
+from cifti_state.core import compute_threshold, find_clusters
+from cifti_state.pipeline import build_adjacency
+from cifti_state.results import AnalysisSpec
+
+threshold = compute_threshold(analysis.stat_map.finite_values(),
+                              method="fixed", value=3.1, direction="two_sided",
+                              statistic="t", df=analysis.dof)
+adjacency = build_adjacency(analysis.stat_map, settings, AnalysisSpec(mesh="32k"))
+clusters = find_clusters(analysis.stat_map, adjacency, threshold, extent=20,
+                         direction="two_sided")
+
+analysis.correct_clusters(clusters)      # 一个带那四列 P 值的 DataFrame
+```
+
+### 手上没有数据也能试
+
+仓库没法随包分发一整队被试，但随包分发了一个生成器：
+
+```bash
+python examples/make_example_study.py --out study --effect 0.9
+python examples/make_example_study.py --out study_paired --paired --effect 0.7
+python examples/group_stats_example.py --study study --paired-study study_paired
+```
+
+它会在一组里种进一个已知大小的 blob，然后把三种检验、平滑度估计和两套校正
+走一遍，每一步都把结果打出来。想看校正什么都不该找出来的样子，
+用 `--effect 0` 生成一个零假设研究。
+
 ## 沟回底板
 
 两个渲染器都会在统计图下面画出灰度的沟回形态，这样一个 blob 是落在脑回顶上还是沟底，
@@ -581,54 +874,173 @@ python examples/check_3d.py              # 或加 --offscreen，改成存 PNG
 所以你知道是*哪一层*坏了，而不用猜。最常见的答案是 VTK 拿不到 OpenGL 上下文：
 远程桌面一般给不了，显卡驱动太老也可能给不了。Figure 页签不需要它。
 
+## 在别的分辨率上工作
+
+fs_LR 32k 是默认，不是硬性要求。
+
+> **完整参考：**[`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md)——
+> 所有网格、所有配置项、所有命令行选项、所有 Python 接口、
+> 每条报错是什么意思，以及一个真实数据上的完整例子。下面这一节是导览。
+别的网格上的图会**在它自己的密度上**跑完整个流程——
+邻接、cluster 面积、峰值坐标、图谱、出图——而且一个网格上的图可以搬到另一个网格上去。
+
+### 网格怎么命名
+
+一个网格是一对信息：**多少个顶点**，以及这些顶点是在**哪个配准空间**里对齐的。
+这不是咬文嚼字——fs_LR 10k 和 fsaverage5 每半球都是 10 242 个顶点，
+却是完全不同的两个面。一个长度 10 242 的数组并不说明自己是哪一个，
+所以这个包**从不猜**：
+
+```
+fsLR:32k     每半球 32 492 顶点   （直接写 "32k" 也是指它）
+fsLR:10k          10 242
+fsLR:59k          59 292        ← 是更密的网格，不是 59 412 灰坐标那个布局
+fsLR:164k        163 842
+fsaverage4         2 562        fsaverage5   10 242
+fsaverage6        40 962        fsaverage   163 842
+```
+
+```bash
+cifti-state meshes            # 哪些网格的模板文件在本机上找得到
+cifti-state meshes --routes   # 哪些之间可以互转
+```
+
+顶点数有歧义时，分析会**停下来问**，而不是挑一个空间、给出一张看起来完全正常的错图。
+`defaults.mesh`（或 `--mesh`）用来定夺。
+
+### 转换
+
+```bash
+cifti-state resample sub-01_bold.dtseries.nii --to fsLR:10k
+cifti-state resample zmap.dscalar.nii --to fsaverage5 --nan mask -o zmap_fs5.dscalar.nii
+```
+
+```
+fsLR:32k -> fsaverage5 [ADAP_BARY_AREA], 1 map(s), medial wall excluded, ROI-masked
+  output  zmap_fs5.dscalar.nii
+```
+
+底下就是 `wb_command -metric-resample ... ADAP_BARY_AREA`，
+也就是 HCP 用的、领域里公认的那个。这个包做的是它**周围**的事，
+而恰恰是这些地方最容易出错：
+
+| | |
+|---|---|
+| **球面选对** | fs_LR → fs_LR 用各自的球面；fs_LR → fsaverage 一边用 `fs_LR-deformed_to-fsaverage`，另一边用 fsaverage 标准球面。配错了，出来的图光滑、看着合理，但相对解剖是转过的。 |
+| **面积度量** | `ADAP_BARY_AREA` 不给 `-area-metrics` 会悄悄退化成接近普通重心插值。这里它**从不可选**：没有面积度量的网格不能作为转换的一端，而且会明说是哪个文件缺了。 |
+| **内侧壁** | 91k / 59k 文件那里本来就没数据。不给 `-current-roi`，缺失的壁会渗进旁边的顶点——错的恰好是皮层最薄、cluster 最常落的那一圈。 |
+| **NaN** | 阈值化的图用 NaN 表示"没过阈值"，而插值会把每个 NaN 摊到它整个邻域上。随包的例子图从 32k 转到 10k：默认 **8.0% → 1.3%**，加 `--nan mask` 是 **8.0% → 6.7%**。 |
+| **标签图** | 网络掩膜、分区图里存的是**标签编号**，取平均会在 3 号和 5 号中间造出一个 4 号。整数取值、层级又不多的图会被识别出来，每个目标顶点取覆盖它最多的那个标签——就是 `wb_command` 的 `-largest`，只不过扩展到了以普通 dscalar 保存的分区图。`--continuous` 可以强制回到取平均。 |
+| **路由** | fs_LR 10k 没有 fsaverage 变形球面，所以 `fsLR:10k → fsaverage5` 一步走不了。它会经 fs_LR 32k 走两步，而多出来的那次插值会**报告出来**，不藏着。 |
+
+每一条 `wb_command` 都记着，`--print-commands` 可以打出来——
+结果可疑时可以自己复现一遍。
+
+一次往返是能同时抓住上面所有问题的检验：光滑场 fs_LR 32k → 10k → 32k
+回来的相关是 **r = 0.9995**，测试里就断言了这一条。
+二值网络掩膜走同一条往返，Dice = **0.998**——20 484 个顶点里变了三个。
+
+那个歧义不是假想出来的。一张每半球 10 242 顶点的个体语言网络掩膜，
+**按 fs_LR 10k 读**，落在 TPOJ1、STSdp、STSda、A5、STGa、55b、PSL 上；
+**同一个文件按 fsaverage5 读**，落在 V1、梭状回和中央后回——
+一张散点似的、没有解剖结构的图。两个答案都像脑图，但只有一个是语言网络。
+这就是 `identify_mesh` 宁可报错也不挑一个的原因。
+
+### 模板：不用写一大堆配置
+
+模板文件的名字本来就稳定而且自解释——
+`fs_LR.32k.L.sphere.surf.gii`、`fsaverage5_std_sphere.L.10k_fsavg_L.surf.gii`、
+`S900.L.midthickness_MSMAll.10k_fs_LR_va.shape.gii`——
+所以配置里列的是**目录**，不是文件：
+
+```yaml
+resources:
+  root: fs_LR_32k
+  mesh_dirs: [fs_LR_32k, 10k, resample_fsaverage]
+```
+
+缺什么会指名道姓地说，连同它是做什么用的、去哪些目录找过。
+名字不合惯例的文件可以在 `resources.mesh_files` 里直接钉死。
+搜索**不递归**，也跳过 `old_` / `fix_` 前缀——
+因为 HCP 的 `resample_fsaverage/misc/` 里放的是被取代的旧球面，
+用错了会得到一个看起来完全正常的错误答案。
+
+### 流程跟着数据走
+
+```bash
+cifti-state run zmap_10k.dscalar.nii --method fixed --threshold 1.039 --extent 5
+```
+
+```
+loaded zmap_10k.dscalar.nii [18722 greyordinates]: L 9362/10242, R 9360/10242
+input is on fsLR:10k (10242 vertices per hemisphere)
+resampling atlas Glasser_2016 from fsLR:32k to fsLR:10k
+found 40 clusters (left 22, right 18) at fixed(+1.039), extent >= 5
+```
+
+密度是从文件里读出来的。邻接来自那个网格的曲面，cluster 面积和峰值坐标来自它的
+midthickness，图画在它的 inflated 上，沟回底板也会被重采样过去。
+Glasser 图谱是 32k 的，所以会用 `wb_command -label-resample ... -largest`
+转一次并缓存——每个目标顶点取覆盖它最多的那个标签，绝不做插值平均——
+360 个脑区一个不少。
+
+### 从 Python 调用
+
+完整接口在 [`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md#8-python-接口)，
+这里是它大概的样子：
+
+```python
+from cifti_state import load_settings
+from cifti_state.mesh import MeshLibrary, plan_route, resample_cifti
+
+settings = load_settings()
+print(settings.mesh_library().report())        # 本机上有哪些网格可用
+
+result = resample_cifti("zmap.dscalar.nii", "zmap_10k.dscalar.nii",
+                        "fsLR:10k", settings, nan="mask")
+print(result.describe())
+result.commands            # 每一条 wb_command，可以直接粘到终端里
+result.warnings            # 两跳路由、NaN 处理、缺 atlasroi 之类
+```
+
+### 为什么不用 neuromaps？
+
+[neuromaps](https://github.com/netneurolab/neuromaps) 解的是同一个问题，做得也好，
+但它的面数据变换底下调的就是同一批 `wb_command`——
+它多出来的价值是从 OSF 下载模板文件。而这些文件本来就在这儿了。
+所以默认后端直接调 Workbench：少一个依赖、不用下载（在连不上 OSF 的机器上这点很要紧）、
+调用链看得见。想用它的图谱管理，传 `backend="neuromaps"` 即可。
+
 ## 路线图
 
-### 顶点级统计与 RFT cluster 校正
+### 统计模型的其余部分
 
-目前 `cifti_state` 的起点是一张你在别处算好的统计图。下一个大块是
-`cifti_state.stats` 模块，把
-[SurfStat](https://www.math.mcgill.ca/keith/surfstat/) 的那套模型搬进 Python，
-让设计矩阵进去、校正后的 cluster 推断出来，整个过程不用离开这个流程：
+三种 t 检验、三套校正以及与 PALM 等价的 TFCE 都已经做好了（见[组水平统计](#组水平统计)）。
+[SurfStat](https://www.math.mcgill.ca/keith/surfstat/) 的模型还能提供什么，
+以及接下来打算做什么：
 
-| 计划实现 | SurfStat 对应 | 得到什么 |
+| 计划实现 | SurfStat 对应 | 会带来什么 |
 |---|---|---|
-| 模型项与设计矩阵 | `SurfStatLinMod` | 跨被试的顶点级线性模型（含混合效应） |
-| 对比 | `SurfStatT`、`SurfStatF` | t 图和 F 图，直接喂给现有的 cluster 环节 |
-| 从模型残差算 resel | `SurfStatResels` | 曲面的内在平滑度，以 resel 计 |
-| 校正后的 P 值 | `SurfStatP` | 随机场理论下的峰值级和 cluster 范围级 P 值，FWE 校正 |
-| 已有的 BH-FDR | `SurfStatQ` | 已经实现，作为另一个选项保留 |
+| F 对比 | `SurfStatF` | 一次检验多个预测变量，而不只是一个对比 |
+| 混合效应 | 带随机项的 `SurfStatLinMod` | 超出简单配对的重复测量和纵向设计 |
+| 接受用户提供的 FWHM 或 resel 数 | `SurfStatResels` | 用别处估的平滑度来驱动 RFT 校正 |
+| 直接接受残差图 | — | 校正在别的软件里拟合好的模型 |
 
-**为什么两者要一起来。** RFT 的 cluster 范围 P 值依赖底层随机场的平滑度，
-而 SurfStat 是从 GLM 残差里取这个量的。改从一张做好的统计图去估当然诱人，
-但有偏：在这张曲面上做模拟，估出来的平滑度偏低 6–17%，
-于是实际的族系错误率被推到 **0.06–0.18**，而名义值是 0.05——具体多少取决于成簇阈值。
-把真平滑度喂进去，同一段代码得到的正好是 **0.050**。
-所以只有拿到残差，这个校正才可信——模型层因此要先做，RFT 跟着它一起交付，而不是抢在它前面。
-
-有两件事会更早落地，给已经手里有这些东西的人用：
-
-- 接受**用户提供的 FWHM 或 resel 数**，这样你自己流程里估出来的值现在就能驱动 RFT 校正；
-- 直接接受**残差图**，供在别处拟合好模型的情况。
-
-[BrainStat](https://github.com/MICA-MNI/BrainStat) 是 SurfStat 的 Python 后继，
-覆盖了其中大部分内容；这里的实现会以它作为对拍基准，
-在它是更好答案的地方也可能直接封装它而不是重写。
+对 cluster 做非参数 FDR 也能补上上面校准表指出的那个缺口，是最可能的下一步。
 
 ### 其他分辨率的皮层
 
-核心部分没有任何地方绑死在 32k 上。读入时顶点映射取自每个文件自己的 brain model，
-`neighbor_source: surface` 会从你指给它的任何网格上建邻接，
-`defaults.mesh` 指明用哪一套模板——所以只要提供匹配的曲面和图谱，
-换一个密度**现在就能跑**，而且随包配置里已经留好了 `"10k"` 网格的邻接表位置。
+fs_LR 32k 已经不再是唯一的密度了（见[在别的分辨率上工作](#在别的分辨率上工作)）。
+还没做的：
 
-计划要做的，是把「能跑」变成「好用」：
-
-- **fs_LR 164k**（每半球 163 842 顶点），也就是 HCP 的完整密度；以及用于快速迭代的低分辨率 fs_LR 网格；
-- **fsaverage5 / fsaverage6 / fsaverage**（每半球 10 242 / 40 962 / 163 842 顶点），
-  从 FreeSurfer 曲面读入，配 `.annot` 或 `label.gii` 分区；
-- **自动检测密度**，让 `defaults.mesh` 不再是一个你必须记得去设的东西；
-- **按密度组织的图谱 registry**，使 `cifti-state atlases` 列出的是你当前密度下真实存在的那些；
-- **随包的模板预设**，让换一个密度变成改一行配置，而不是满世界找文件。
+- **fs_LR 59k / 164k、fsaverage4/6/fsaverage** 已经在网格登记表里，
+  只要对应的模板包在搜索路径上就能用；随包直接跑通的只有 fs_LR 10k 和 fsaverage5 两条路径。
+- **直接读 FreeSurfer 原生格式**——`.mgh`/`.mgz` 的面数据和 `.annot` 分区，
+  不用绕 GIFTI / CIFTI。
+- **按密度组织的图谱 registry**，让 `cifti-state atlases` 列出的是当前密度下
+  真实存在的那些，而不是按需转换。
+- **被试自身空间的曲面**，通过每个被试自己的 `sphere.reg` 重采样，
+  给那些本来就不该经过组模板的分析用。
 
 cluster 的复杂度对顶点数是线性的，所以 164k 大约是 32k 的五倍开销，仍然轻松；
 真正变重的是建邻接和渲染，这两件都有缓存。
@@ -649,6 +1061,8 @@ cifti_state/
   wb.py         wb_command / wb_view 封装，每次调用完整记入日志
   io/           cifti · surface · neighbors · atlas
   core/         threshold · cluster · peaks · annotate · report · mask
+  stats/        design · data · glm · resels · rft · permutation · tfce · ttest
+  mesh/         spaces（命名）· templates（找文件）· resample（转换）
   fonts.py      字体解析与 UTF-8，Qt 和 matplotlib 共用
   viz/          render (surfplot) · interactive (PyVista) · underlay (沟回)
                 · colormaps · layouts
@@ -658,6 +1072,13 @@ cifti_state/
   cli.py
 ```
 
+更长的文档在 `docs/`：
+
+| | |
+|---|---|
+| [`docs/INSTALL.md`](docs/INSTALL.md) | Windows 十步安装实录，每条命令该看到什么输出都写了。 |
+| [`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md) · [English](docs/MESHES.md) | 皮层网格与重采样：所有网格、配置项、命令行选项、Python 接口、报错对照，外加一个真实例子。 |
+
 `core/` 按六条规矩写，好让 Qt 前端能直接调用：对数组做纯函数运算、
 不打印（只用 `logging`）、慢的东西带 `progress` 回调、长的东西带 `cancel` 令牌、
 配置作为参数传入而不是读全局、每个结果都携带产生它的那份参数快照——
@@ -666,7 +1087,7 @@ cifti_state/
 ## 测试
 
 ```bash
-pytest          # 112 项；裸 clone 下会跳过 3 项（它们需要邻接表和 Desikan 图谱，
+pytest          # 207 项；裸 clone 下会跳过 3 项（它们需要邻接表和 Desikan 图谱，
                 # 这两样没有随包分发）
 ```
 
@@ -686,6 +1107,14 @@ pytest
 界面的 headless 测试——包括「worker 回调必须落在 GUI 线程」这一条断言，
 所有控件更新都依赖它；以及上面那些回归基准。
 
+组水平统计有自己的对照标准：每种 t 检验都与 scipy 的 `ttest_1samp` /
+`ttest_ind` / `ttest_rel` 对拍到机器精度（含 Welch 的自由度）；
+resel 计数与 [BrainStat](https://github.com/MICA-MNI/BrainStat) 实现的 SurfStat
+对拍到 1e-15；EC 密度和峰值 P 值对拍到 1e-8；
+估出的 FWHM 与用已知核平滑出来的场对照；
+置换那部分则检验那条必须精确成立的恒等式——不置换的那一次必须复现观测到的统计量，
+带协变量也一样；TFCE 则直接与在 Octave 里跑的 PALM 自家 `palm_tfce.m` 对拍到 1e-15。
+
 ## 示例数据
 
 `example_data/` 里有两张统计图、各自应当得到的 cluster 图，
@@ -703,7 +1132,7 @@ surface-based atlases.* Cerebral Cortex 2012; 22:2241–2262）。
 默认分区是 Glasser MF et al. *A multi-modal parcellation of human cerebral cortex.*
 Nature 2016; 536:171–178。使用时请引用这些工作。
 
-**统计（计划中，见[路线图](#路线图)）。** Worsley KJ, Taylor JE, Carbonell F,
+**统计。** Worsley KJ, Taylor JE, Carbonell F,
 Chung MK, Duerden E, Bernhardt B, Lyttelton O, Boucher M, Evans AC.
 *SurfStat: A Matlab toolbox for the statistical analysis of univariate and
 multivariate surface and volumetric data using linear mixed effects models and
@@ -711,7 +1140,18 @@ random field theory.* NeuroImage 2009; 47(Suppl 1):S102。
 校正背后的随机场理论是 Worsley KJ, Marrett S, Neelin P, Vandal AC, Friston KJ,
 Evans AC. *A unified statistical approach for determining significant signals in
 images of cerebral activation.* Human Brain Mapping 1996; 4:58–73。
-Python 后继是 [BrainStat](https://github.com/MICA-MNI/BrainStat)。
+Python 后继是 [BrainStat](https://github.com/MICA-MNI/BrainStat)，
+本包的 resel 与 EC 密度代码以它为对拍基准。
+置换推断依据 Winkler AM, Ridgway GR, Webster MA, Smith SM, Nichols TE.
+*Permutation inference for the general linear model.* NeuroImage 2014; 92:381–397。
+TFCE 依据 Smith SM, Nichols TE. *Threshold-free cluster enhancement: addressing
+problems of smoothing, threshold dependence and localisation in cluster
+inference.* NeuroImage 2009; 44:83–98；这里的实现以
+[PALM](https://github.com/andersonwinkler/PALM) 的 `palm_tfce.m` 为对拍基准，
+作者与上面那篇置换推断的是同一批人。
+cluster 范围推断的校准问题见 Eklund A, Nichols TE, Knutsson H.
+*Cluster failure: why fMRI inferences for spatial extent have inflated
+false-positive rates.* PNAS 2016; 113:7900–7905。
 
 **软件。** 出图用 [surfplot](https://github.com/danjgale/surfplot) 和
 [BrainSpace](https://github.com/MICA-MNI/BrainSpace)；

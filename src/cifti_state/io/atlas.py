@@ -252,8 +252,18 @@ def load_atlas(
     *,
     registry: Optional[AtlasRegistry] = None,
     use_csv: bool = True,
+    mesh: Optional[str] = None,
 ) -> Atlas:
-    """Load an atlas by registry name, alias, or bare filename stem."""
+    """Load an atlas by registry name, alias, or bare filename stem.
+
+    Atlases are distributed on one mesh -- fs_LR 32k, almost always -- and an
+    analysis at another density needs the same parcellation there.  Passing
+    *mesh* resamples the label files onto it with
+    ``wb_command -label-resample ... -largest``, which gives each target vertex
+    the label covering most of it rather than an interpolated (and meaningless)
+    average.  The resampled files are cached, so this costs one Workbench call
+    the first time a study touches a new density and nothing afterwards.
+    """
     registry = registry or load_registry()
     entry = registry.resolve(name)
 
@@ -269,6 +279,8 @@ def load_atlas(
             raise FileNotFoundError(
                 f"atlas {entry.name!r}: missing {hemi} file {path}"
             )
+        if mesh is not None:
+            path = _atlas_on_mesh(path, entry, hemi, mesh, settings)
         labels, name_pairs = _read_label_gii(str(path))
         names = dict(name_pairs)
         if entry.strip_prefix:
@@ -300,6 +312,42 @@ def load_atlas(
 # --------------------------------------------------------------------------- #
 # internals
 # --------------------------------------------------------------------------- #
+
+
+def _atlas_on_mesh(
+    path: Path, entry: "AtlasEntry", hemi: str, mesh: str, settings: Settings
+) -> Path:
+    """The atlas file for *hemi* on *mesh*, resampling and caching if needed."""
+    from ..mesh.resample import plan_route, resample_label_gifti
+    from ..mesh.spaces import identify_mesh, parse_mesh
+
+    target = parse_mesh(mesh)
+    n_source = int(nib.load(str(path)).darrays[0].data.size)
+    if n_source == target.n_vertices:
+        return path
+
+    library = settings.mesh_library()
+    source = identify_mesh(n_source, prefer=settings.defaults.mesh)
+    cache_dir = settings.temp_dir() / "atlases" / target.name.replace(":", "_")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out_path = cache_dir / path.name.replace(".label.gii", f".{target.density}.label.gii")
+    if out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime:
+        log.debug("using the cached %s atlas at %s", target.name, out_path)
+        return out_path
+
+    steps = plan_route(source, target, library)
+    log.info(
+        "resampling atlas %s (%s) from %s to %s",
+        entry.name, hemi, source.name, target.name,
+    )
+    current = path
+    for index, step in enumerate(steps):
+        step_out = out_path if index == len(steps) - 1 else (
+            cache_dir / f"{path.stem}.step{index}.label.gii"
+        )
+        resample_label_gifti(current, step_out, step, hemi, library, settings)
+        current = step_out
+    return out_path
 
 
 @lru_cache(maxsize=32)
