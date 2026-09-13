@@ -42,6 +42,10 @@ map.dscalar.nii  ──▶  threshold  ──▶  clusters  ──▶  peaks + a
 | **Publication figures and a live 3D view** | surfplot for the figure you export, PyVista for the one you rotate — both over the same arrays, both with the sulcal underlay. |
 | **Runs the example out of the box** | `example_data/` ships the maps *and* the minimum templates. Clone, install, run. |
 
+It began as a set of MATLAB functions for this analysis; the Python package was
+written with [Claude Code](https://claude.com/claude-code), working from them —
+see [References and acknowledgements](#references-and-acknowledgements).
+
 ## Install
 
 <details open>
@@ -1207,6 +1211,20 @@ the minimum fs_LR 32k template files needed to run everything above — about
 each file is and where the third-party templates come from.
 
 ## References and acknowledgements
+
+**How this package came about.** It started as a set of MATLAB functions for
+fs_LR 32k surface cluster analysis — thresholding, connected components on the
+neighbour tables, peak finding, atlas lookup, report assembly and a surface
+plot. Those scripts defined what the tool had to do and how it had to behave.
+The Python package was written with
+[Claude Code](https://claude.com/claude-code), working from them: the analysis
+logic was read out of the original functions and reorganised into a library
+with an explicit configuration layer, a shared core behind three front ends,
+and a test suite — including regression fixtures that reproduce the original
+cluster maps vertex for vertex. The group statistics, the mesh conversion and
+the interface were then built on top of that base. Anything the original
+scripts decided, this package still decides the same way; everything else is
+new.
 
 **Templates.** The fs_LR 32k files in `example_data/fs_LR_32k/` come from
 [DiedrichsenLab/fs_LR_32](https://github.com/DiedrichsenLab/fs_LR_32). The

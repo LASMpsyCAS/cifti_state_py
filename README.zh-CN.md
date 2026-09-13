@@ -42,6 +42,10 @@ map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 
 | **能出版的图 + 能转的 3D** | surfplot 负责导出的静态图，PyVista 负责可旋转的交互视图——同一批数组，都带沟回底板。 |
 | **clone 完就能跑例子** | `example_data/` 里既有数据也有最小模板文件。克隆、安装、直接跑。 |
 
+这套东西最初是一组做同一件事的 MATLAB 函数；Python 版本是用
+[Claude Code](https://claude.com/claude-code) 从它们出发整理写成的，
+详见[引用与致谢](#引用与致谢)。
+
 ## 安装
 
 <details open>
@@ -1123,6 +1127,15 @@ resel 计数与 [BrainStat](https://github.com/MICA-MNI/BrainStat) 实现的 Sur
 [`example_data/README.md`](example_data/README.md)。
 
 ## 引用与致谢
+
+**这个包是怎么来的。** 它最初是一套做 fs_LR 32k 皮层 cluster 分析的 MATLAB
+函数——阈值化、在邻接表上找连通域、找峰值、查图谱、拼报表、画一张曲面图。
+那套脚本定义了这个工具要做什么、要怎么表现。Python 版本是用
+[Claude Code](https://claude.com/claude-code) 从它们出发写出来的：
+把原函数里的分析逻辑读出来，重新组织成一个库——独立的配置层、
+三个入口共用的核心、以及一套测试，其中的回归对拍能逐顶点复现原来的 cluster 图。
+组水平统计、网格转换和图形界面，是在这个基础上再往上加的。
+原脚本已经决定过的事，这个包仍然按同样的方式决定；其余都是新写的。
 
 **模板。** `example_data/fs_LR_32k/` 里的 fs_LR 32k 文件来自
 [DiedrichsenLab/fs_LR_32](https://github.com/DiedrichsenLab/fs_LR_32)。

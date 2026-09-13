@@ -41,11 +41,6 @@ Both maps are in the **91k** layout (29 696 + 29 716 cortical vertices with the
 medial wall excluded, plus 19 subcortical structures). `tests/test_regression.py`
 reproduces both cluster maps exactly, including the cluster numbering.
 
-These come from gw's own analysis and are provided so the toolkit can be tested;
-they are not a public dataset and carry no separate licence.
-
-这两张图来自 gw 自己的分析，随包提供仅供测试之用，不是公开数据集。
-
 ## `fs_LR_32k/` — template files (third party)
 
 The smallest set that makes the example self-contained. Not produced by this
