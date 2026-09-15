@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen.svg)](#测试)
+[![Tests](https://img.shields.io/badge/tests-291%20passing-brightgreen.svg)](#测试)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#安装)
 
 [English](README.md) · [中文](README.zh-CN.md)
@@ -33,13 +33,14 @@ map.dscalar.nii  ──▶   阈值    ──▶  cluster  ──▶   峰值 + 
 | | |
 |---|---|
 | **三种 fs_LR CIFTI 布局都能读** | 91k、59k、64k 说的都是同一套左右 32k 皮层。顶点映射从每个文件自己的 brain model 里读，不对灰坐标总数做任何假设——写回时也用你给的那种布局。GIFTI 半球对也支持。 |
-| **不止一种分辨率** | fs_LR 10k 和 fsaverage5 能在自己的密度上跑完整个流程——邻接、面积、图谱、出图；`cifti-state resample` 通过 `wb_command` 在网格之间搬数据，球面配对、面积度量、内侧壁排除一样不落。 |
+| **不止一种分辨率** | fs_LR 10k 和 fsaverage5 能在自己的密度上跑完整个流程，而报表一律在图谱所在的 fs_LR 32k 上量、在那里命名——不同密度出来的表可以直接对比。`cifti-state resample` 通过 `wb_command` 在网格之间搬数据，球面配对、面积度量、内侧壁排除一样不落。 |
 | **交代得清楚的 cluster** | 正向、负向、双向；以顶点数计的最小 extent；固定值、FDR、百分位三种阈值；编号是确定性的。每个结果都携带产生它的那份参数快照。 |
 | **脑区名来自图谱本身** | 每个 `label.gii` 自带的 LabelTable 就是权威来源，按（半球，label id）索引——所以模板包里的图谱全都能用，不只是额外配了查找表的那几个。 |
 | **老实的峰值表** | 峰值**和**均值各用各的名字，另加 SD、min/max、以 mm² 计的面积、峰值与质心坐标，以及每个 cluster 落在每个脑区的占比。 |
 | **组水平统计，带校正** | 跨被试的单样本、双样本、配对 t 检验，可带协变量——然后在整个皮层上做族系错误率校正：随机场理论、置换检验和 TFCE **三套都给**，可以互相对照。TFCE 与 PALM 一致到机器精度。 |
 | **三个入口，一套核心** | 命令行 `cifti-state`、notebook 里 `import cifti_state`、界面 `cifti-state-gui`，调的是同一批函数——界面能做的事都能写成脚本。 |
 | **能出版的图 + 能转的 3D** | surfplot 负责导出的静态图，PyVista 负责可旋转的交互视图——同一批数组，都带沟回底板。 |
+| **脑网络出图** | 玻璃脑 + 节点球 + **有向**连边，输入就是 NeuroMArVL 那四个文本文件——包括它的 edge count 规则（精确复现）和它存下来的 settings 文件。 |
 | **clone 完就能跑例子** | `example_data/` 里既有数据也有最小模板文件。克隆、安装、直接跑。 |
 
 这套东西最初是一组做同一件事的 MATLAB 函数；Python 版本是用
@@ -203,8 +204,8 @@ cifti-state run tmap.dscalar.nii --statistic t --df 29 --method fdr --q 0.05
 <details>
 <summary><b>4 · 输入不在 fs_LR 32k 上</b></summary>
 
-什么都不用设：密度是从文件里读的，整个流程就在那个密度上跑——
-邻接、cluster 面积、图谱、出图。
+什么都不用设：密度是从文件里读的，整个流程就在那个密度上跑——邻接、cluster、出图。
+报表则一律在图谱所在的 fs_LR 32k 上量、在那里命名，所以不同密度的表能直接比。
 
 ```bash
 cifti-state run zmap_10k.dscalar.nii --method fixed --threshold 1.039 --extent 5
@@ -982,11 +983,22 @@ resampling atlas Glasser_2016 from fsLR:32k to fsLR:10k
 found 40 clusters (left 22, right 18) at fixed(+1.039), extent >= 5
 ```
 
-密度是从文件里读出来的。邻接来自那个网格的曲面，cluster 面积和峰值坐标来自它的
-midthickness，图画在它的 inflated 上，沟回底板也会被重采样过去。
-Glasser 图谱是 32k 的，所以会用 `wb_command -label-resample ... -largest`
-转一次并缓存——每个目标顶点取覆盖它最多的那个标签，绝不做插值平均——
-360 个脑区一个不少。
+密度是从文件里读出来的。邻接、阈值、cluster 和出图都在那个密度上做，
+用那个网格自己的曲面，沟回底板也会重采样过去。
+
+**但报表出在 fs_LR 32k 上。** 图谱是按 32k 发布的，
+把一个 180 区的分区图**往下**转到 10k，整块脑区只剩几个顶点，
+逐区百分比就跟着变粗。所以是把跑完的 cluster **往上**送——
+`wb_command -label-resample … -largest`，每半球一次——在那里量、在那里命名。
+这样不管分析在什么密度上做，一张表的含义都一样。
+
+怎么分，按每个数是什么来定：统计量的值（`peak_value`、均值、SD、min、max）
+留在分析密度上，因为那是数据本身；面积、坐标、`peak_vertex` 和所有脑区列
+来自 fs_LR 32k。另有一列 `size_vertices_native` 保留 `--extent` 阈值
+实际作用的那个顶点数。cluster 图两个网格上各写一份，表才有东西可核对。
+想让每张报表都在自己密度上量，设 `report_mesh: native`（或 `--report-mesh native`）。
+
+细节见 [`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md#报表一律出在-fs_lr-32k-上)。
 
 ### 从 Python 调用
 
@@ -1014,6 +1026,138 @@ result.warnings            # 两跳路由、NaN 处理、缺 atlasroi 之类
 它多出来的价值是从 OSF 下载模板文件。而这些文件本来就在这儿了。
 所以默认后端直接调 Workbench：少一个依赖、不用下载（在连不上 OSF 的机器上这点很要紧）、
 调用链看得见。想用它的图谱管理，传 `backend="neuromaps"` 即可。
+
+## 脑网络出图
+
+统计图回答的是「在哪儿」；连接矩阵回答的是「在什么和什么之间、朝哪个方向」。
+`cifti-state network` 把后一种画在同一张 fs_LR 32k 表面上：半透明玻璃脑、
+按属性决定大小和颜色的节点球，以及带箭头的**有向**连边。
+
+![玻璃脑上的有向网络](docs/images/network.png)
+
+> **完整参考：**[`docs/NETWORK.zh-CN.md`](docs/NETWORK.zh-CN.md)——每一个选项、
+> 每一种模式、选边规则的准确定义和它是怎么验证的、Python 接口，以及每条警告是什么
+> 意思。下面这一节是导览。
+
+```bash
+python examples/network_example.py     # 六张图，不需要任何数据
+```
+
+**输入格式、选边规则和 settings 文件都来自
+[NeuroMArVL](https://immersive.erc.monash.edu/neuromarvl/)**（Adamson 等，
+*Network Neuroscience* 2026——完整引用以及「哪些东西是共用的、哪些不是」见
+[引用与致谢](#引用与致谢)）。这个模块存在的意义就是：你在那个工具里交互调好的一张图，
+可以在这里用脚本复现出来、批量出、纳入版本管理。
+
+### 控制窗口
+
+决定一张网络图的那几个数——画多少条边、脑壳多透、管子多粗、标签是帮忙还是添乱——
+是看出来的，不是想出来的。`--interactive` 会把所有选项做成控件，摆在一个能拖着转的脑
+旁边：
+
+![网络控制窗口](docs/images/network_window.png)
+
+```bash
+cifti-state network net/ -k 16 --labels-on --interactive    # 需要 pip install -e ".[gui]"
+```
+
+改动会累积起来，点一次 **Refresh** 全部生效——因为重建一个密集网络要一两秒，而一个
+「改什么就立刻重画」的面板，在你连着设几个数的时候大部分时间都在画你并不想看的中间
+状态。只微调一个值时勾 `Auto` 切回连续重画；相机和视角下拉框从不等待。
+
+视图下方那一栏始终显示复现当前画面的那行 `cifti-state network` 命令——`Copy` 进剪贴板，
+`Save figure…` 直接写文件。窗口里的设置不会被隐式保存，所以从这个窗口里出来的图，
+依然能追溯到一行可读、可重跑、可以写进方法部分的命令。（有一条测试会把这行命令再塞回
+CLI 解析一遍，确认含义没变。）
+
+### 输入
+
+四个纯文本文件：
+
+```
+coordinates.txt          n 行  x y z   （MNI 毫米）
+labels.txt               n 个节点名
+matrix_<名字>.txt        n x n；matrix[i][j] 是 i -> j
+attributes_<名字>.txt    n 行数值列，首行是列名
+```
+
+空格、Tab、逗号都能作分隔符，表头是自动识别而不用声明的。**矩阵永远不会被对称化**
+——在有效连接里 `M[i][j] ≠ M[j][i]` 就是信号本身，不是要平均掉的噪声——而文件之间
+任何对不上的地方都会被点名拒绝，而不是悄悄放过：
+
+```
+NetworkError: 9 coordinates but the matrix is 12 x 12; the two files
+              describe different networks
+```
+
+### 画哪些边
+
+每一张网络图都是阈值化过的，所以阈值是什么含义本身就是结果的一部分。三条规则，
+自动生成的图注总会写明用的是哪一条、以及它给出的阈值是多少：
+
+```bash
+cifti-state network net/ --top 20 -o fig.png           # 最强的 N 条有向边
+cifti-state network net/ --threshold 0.12 -o fig.png   # 权重 >= 你指定的数
+cifti-state network net/ -k 16 -o fig.png              # NeuroMArVL 的 edge count 滑块
+```
+
+第三条是**精确复现**的，因为在这里出的图和在浏览器里出的图必须是同一张图：把每一对
+节点按「两个方向里较大的那个」排序，在第 k 个处切，然后把**所有**达到这个阈值的有向边
+画出来。`k` 数的是「对」，图上数的是「方向」，所以 k 不是箭头条数——在一张真实的 9
+节点矩阵上，`k=16` 画出 24 条箭头。`--explain-k` 会把整张表打出来然后停下：
+
+```
+   k       cutoff   arrows
+  16     0.045925       24
+  ...
+  30     0.001554       51
+  31    -0.001691       52  <- cutoff is negative
+
+largest k with a positive cutoff: 30
+```
+
+最后一行才是关键。越过它之后阈值变成负数，抑制性连接会被画得和兴奋性连接一模一样、
+且没有任何标记——所以渲染器会警告，图注会在图上写明，而 `--drop-negative` 和
+`--edge-color sign` 是两种诚实的走法。
+
+这条规则不是近似的。测试里存着 NeuroMArVL 自己公布的、五个数据集的 `k → 箭头数`
+对照表——29 个数字，外加每个数据集「阈值仍为正的最大 k」——并且全部逐一核对。
+
+### 长什么样
+
+```bash
+cifti-state network taskaverage/ -k 16 \
+    --size-by out_degree --color-by group_id --labels-on \
+    --edge-color node-transitioning --views left dorsal -o out_degree.png
+```
+
+| | |
+|---|---|
+| **节点** | 半径和颜色都可以取自任意属性列；不同取值 ≤ 20 个的属性按分组变量处理、套离散配色，多于 20 个按测量值处理、套色标 |
+| **边的颜色** | `none`、`weight`、`signed`（正边深红、负边深紫，深浅表示强度）、`node`（源节点的颜色）、`node-transitioning`（源色渐变到目标色）、`sign`（两个平色块） |
+| **方向** | `arrow`（目标端一个锥形箭头）、`gradient`、`taper`、`opacity`、`none` |
+| **粗细** | 固定毫米值，或随 `\|权重\|` 在你指定的两个半径之间变化 |
+| **脑壳** | 任意已配置的表面、分半球、透明度，以及 `--split MM` 把两个半球拉开 |
+| **分栏** | 一张图里最多六个视角，各栏裁到内容再补边，保证像素比例一致 |
+
+从浏览器存下来的 settings JSON 可以直接加载，会带过来大小属性与范围、配色、边的各种
+模式、脑表面、视角和 edge count；凡是静态图没有对应物的（2D 布局、旋转、动画边）都会
+打一条日志点自己的名，而不是悄悄消失：
+
+```bash
+cifti-state network net/ --settings settings/size_in_degree.json -k 16 -o fig.png
+```
+
+### 真正能抓住错误的那个检查
+
+节点坐标是体素索引、是另一个模板、或者左右翻了，做出来的图都**看起来完全正常**。
+所以每次运行都会把坐标和脑表面自己的包围盒比一遍，对不上就说出来：
+
+```
+warning: 9 of 9 nodes fall outside the surface's bounding box (worst by
+190.4 mm): IFJ, SFL, B55pre, … The coordinates are probably not in the
+same space as the mesh.
+```
 
 ## 路线图
 
@@ -1082,6 +1226,7 @@ cifti_state/
 |---|---|
 | [`docs/INSTALL.md`](docs/INSTALL.md) | Windows 十步安装实录，每条命令该看到什么输出都写了。 |
 | [`docs/MESHES.zh-CN.md`](docs/MESHES.zh-CN.md) · [English](docs/MESHES.md) | 皮层网格与重采样：所有网格、配置项、命令行选项、Python 接口、报错对照，外加一个真实例子。 |
+| [`docs/NETWORK.zh-CN.md`](docs/NETWORK.zh-CN.md) · [English](docs/NETWORK.md) | 玻璃脑网络出图：四个输入文件、三条选边规则以及 NeuroMArVL 那条是怎么验证的、所有样式选项、settings 文件兼容性，以及每条警告的含义。 |
 
 `core/` 按六条规矩写，好让 Qt 前端能直接调用：对数组做纯函数运算、
 不打印（只用 `logging`）、慢的东西带 `progress` 回调、长的东西带 `cancel` 令牌、
@@ -1091,8 +1236,8 @@ cifti_state/
 ## 测试
 
 ```bash
-pytest          # 207 项；裸 clone 下会跳过 3 项（它们需要邻接表和 Desikan 图谱，
-                # 这两样没有随包分发）
+pytest          # 291 项；裸 clone 下会跳过 8 项（它们需要邻接表、Desikan 图谱，
+                # 或者一份没有随包分发的连接矩阵数据）
 ```
 
 不需要任何准备：依赖数据的测试默认就跑在 `example_data/` 上，
@@ -1109,7 +1254,8 @@ pytest
 用桩程序验证 `wb_command` 封装；标注与报表组装；cluster mask；
 底板的灰度与符号判定；字体解析和数字框的几道防线；
 界面的 headless 测试——包括「worker 回调必须落在 GUI 线程」这一条断言，
-所有控件更新都依赖它；以及上面那些回归基准。
+所有控件更新都依赖它；以及上面那些回归基准；
+还有网络模块的读取器、三条选边规则、settings 文件往返和场景组装。
 
 组水平统计有自己的对照标准：每种 t 检验都与 scipy 的 `ttest_1samp` /
 `ttest_ind` / `ttest_rel` 对拍到机器精度（含 Welch 的自由度）；
@@ -1165,6 +1311,28 @@ inference.* NeuroImage 2009; 44:83–98；这里的实现以
 cluster 范围推断的校准问题见 Eklund A, Nichols TE, Knutsson H.
 *Cluster failure: why fMRI inferences for spatial extent have inflated
 false-positive rates.* PNAS 2016; 113:7900–7905。
+
+**脑网络出图。** `cifti-state network` 读的输入格式、选边规则和 settings 文件都来自
+莫纳什大学 Immersive Analytics Lab 的 **NeuroMArVL**：
+
+> Adamson CL, Gajwani M, Klapperstueck M, Manley J, Dwyer T, Fornito A.
+> *NeuroMArVL: An interactive and collaborative web-based tool for visualizing
+> brain networks.* Network Neuroscience 2026; 10(3):683–705.
+> doi:[10.1162/netn.a.569](https://doi.org/10.1162/netn.a.569)
+>
+> 工具：<https://immersive.erc.monash.edu/neuromarvl/> ·
+> 源码：<https://github.com/NSBLab/NeuroMArVL>（GPL v3；开发者 Tim Dwyer、
+> Alex Fornito、Thanh Nhan Pham、Mingzheng Shi、Nicholas Smith、James Manley，
+> 莫纳什大学，2015–2017）
+
+**凡是用 `cifti-state network` 出的图，请引用上面那篇论文**；如果「可复现」这件事对你
+要报告的内容有意义，可以再一并引用本工具包。
+
+哪些是共用的、哪些不是：这里的渲染器是**独立实现**，不是移植——没有使用也没有包含
+NeuroMArVL 的任何代码，本工具包是 MIT 协议。它刻意复现的是那些「必须一致、否则两边画不出
+同一张图」的**行为**：四文件输入格式，以及 edge count 规则（对着那个工具自己公布的
+`k → 箭头数` 表逐一核对过）。它只覆盖 3D 玻璃脑那一部分。要探索一个网络、要和别人协作看
+同一张图，仍然该用那个交互式网页工具；它的 2D、环形和 topology 布局在这里没有对应物。
 
 **软件。** 出图用 [surfplot](https://github.com/danjgale/surfplot) 和
 [BrainSpace](https://github.com/MICA-MNI/BrainSpace)；

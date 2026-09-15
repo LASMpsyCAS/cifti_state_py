@@ -286,6 +286,12 @@ class ThresholdDefaults:
 @dataclass
 class DefaultSettings:
     mesh: str = "32k"
+    #: The mesh every report is measured and named on. Atlases are distributed
+    #: on fs_LR 32k, so carrying a coarser analysis up to it beats carrying the
+    #: atlas down: the region percentages stay as fine as the parcellation is,
+    #: and two studies at different densities produce comparable tables. Set to
+    #: "native" to measure each report at its own analysis density instead.
+    report_mesh: str = "fsLR:32k"
     statistic: str = "z"          # z | t | other
     df: Optional[float] = None    # required when statistic == "t"
     direction: str = "positive"   # positive | negative | two_sided
@@ -411,6 +417,7 @@ class Settings:
         thr_raw = dict(def_raw.get("threshold") or {})
         defaults = DefaultSettings(
             mesh=str(def_raw.get("mesh", "32k")),
+            report_mesh=str(def_raw.get("report_mesh", "fsLR:32k") or "native"),
             statistic=str(def_raw.get("statistic", "z")),
             df=_opt_float(def_raw.get("df")),
             direction=str(def_raw.get("direction", "positive")),

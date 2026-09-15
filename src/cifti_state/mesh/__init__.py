@@ -31,6 +31,13 @@ A whole conversion is one call::
 and everything it ran is in ``result.commands``, ready to paste into a shell.
 """
 
+from .project import (
+    ReportProjection,
+    nearest_target_vertices,
+    project_clusters,
+    project_for_report,
+    project_stat_map,
+)
 from .resample import (
     DEFAULT_METHOD,
     METHODS,
@@ -73,4 +80,10 @@ __all__ = [
     "resample_cifti",
     "METHODS",
     "DEFAULT_METHOD",
+    # projecting a finished analysis onto the report mesh
+    "ReportProjection",
+    "project_for_report",
+    "project_stat_map",
+    "project_clusters",
+    "nearest_target_vertices",
 ]

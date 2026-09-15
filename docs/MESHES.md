@@ -382,11 +382,11 @@ What follows the data:
 | Step | Source |
 |---|---|
 | Adjacency | that mesh's midthickness (or its neighbour table, if configured) |
-| Cluster area, peak coordinates | that mesh's midthickness |
-| Atlas | resampled from 32k with `-label-resample … -largest`, then cached |
+| Clustering, threshold, extent | that mesh |
 | Figures | that mesh's inflated surface |
 | Sulcal underlay | resampled to that mesh, then cached |
 | Group statistics | smoothness, resels and permutation all run at that density |
+| **The report** | **fs_LR 32k** — see below |
 
 Caches live under `runtime.tmp_dir` (default: the system temp directory,
 `cifti_state/atlases/` and `cifti_state/underlays/`). They are keyed by mesh and
@@ -395,13 +395,49 @@ invalidated when the source file is newer.
 `--mesh` overrides the detection, and is how you resolve an ambiguous vertex
 count for a `run` rather than a `resample`.
 
-### A caveat on atlases
+### The report is written on fs_LR 32k
 
-Resampling a parcellation to a coarser mesh is lossless in the sense that no
-region disappears — all 360 Glasser regions survive at fs_LR 10k — but a small
-region is represented by fewer vertices, so per-region percentages in the report
-get coarser. If the parcellation exists natively at your density, point
-`resources.atlas_dir` at it instead.
+Atlases are distributed on fs_LR 32k. Carrying one *down* to meet coarser data
+works, but it throws away the thing being asked for: a 180-region parcellation
+on a 10k mesh has whole areas represented by a handful of vertices, and the
+region percentages get correspondingly coarse.
+
+So the report goes the other way. Once the clusters are found — at whatever
+density the data is on — they are projected **up** onto fs_LR 32k with
+`wb_command -label-resample … -largest` (one call per hemisphere, all clusters
+at once) and measured and named there, against the atlas as distributed. A
+table then means the same thing whatever density produced it, and two studies
+at different densities can be read side by side.
+
+What is measured where is not arbitrary — it follows what each number *is*:
+
+| Column | Measured on | Why |
+|---|---|---|
+| `peak_value`, `mean_value`, `sd_value`, `min_value`, `max_value` | the analysis density | These are the data. An interpolated peak height is a number that appears in no file you have. |
+| `size_mm2`, `peak_x/y/z`, `centroid_x/y/z` | fs_LR 32k | The finer mesh measures area more faithfully, and the coordinates then match the atlas. |
+| `peak_region`, `primary_region`, `primary_region_percent`, `regions` | fs_LR 32k | Where the atlas is defined, at its own resolution. |
+| `peak_vertex` | fs_LR 32k | The vertex sitting where the real peak is — mapped through the shared registration sphere, not recomputed as the argmax of the resampled map, which can land a vertex over and carry a different value. |
+| `size_vertices` | fs_LR 32k | The report mesh. |
+| `size_vertices_native` | the analysis density | What the `--extent` threshold was actually applied to. Present only when a projection happened. |
+
+The cluster map is written twice: in the input's own layout, and again on the
+report mesh as `..._fsLR-32k.dscalar.nii`, so the `peak_vertex` column can be
+checked against something. **Figures are still drawn at the analysis density**,
+on that mesh's own surfaces.
+
+Nothing changes for an analysis that is already on fs_LR 32k: the projection is
+skipped, and `size_vertices_native` does not appear.
+
+```yaml
+defaults:
+  report_mesh: "fsLR:32k"     # the default
+  # report_mesh: native       # measure each report at its own density instead
+```
+
+`--report-mesh native` does the same for one run. If the report mesh cannot be
+reached — its templates are not on the search path — the run does not fail: the
+table is measured at the analysis density with the atlas carried down to it,
+which is what this package did before, and a warning says so.
 
 ---
 
@@ -516,6 +552,29 @@ load_hemisphere_surfaces(settings, "midthickness", mesh="fsLR:10k")
 load_neighbors(settings, "left", mesh="fsLR:10k", source="surface")
 load_atlas("Glasser_2016", settings, mesh="fsLR:10k")     # resamples + caches
 ```
+
+### Projecting a finished analysis onto the report mesh
+
+```python
+from cifti_state.mesh import (
+    project_for_report, project_stat_map, project_clusters,
+    nearest_target_vertices,
+)
+
+projection = project_for_report(stat_map, clusters, "fsLR:32k", settings)
+projection.stat_map        # SurfaceStatMap on fs_LR 32k
+projection.clusters        # ClusterResult on fs_LR 32k, same ids and signs
+projection.surfaces        # the 32k midthickness, per hemisphere
+projection.native_sizes    # cluster id -> vertex count at the analysis density
+projection.peak_vertices   # cluster id -> the report-mesh vertex of the real peak
+projection.warnings        # e.g. a cluster too small to survive a downward projection
+```
+
+`project_for_report` returns `None` when the analysis is already on the target
+mesh. The three primitives are usable on their own:
+`project_stat_map` (continuous, ROI-aware), `project_clusters` (labels, one
+`-largest` call per hemisphere, returns `(ClusterResult, warnings)`) and
+`nearest_target_vertices` (vertex addresses through the shared sphere).
 
 ---
 

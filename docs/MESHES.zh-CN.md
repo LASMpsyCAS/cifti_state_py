@@ -358,11 +358,11 @@ found 40 clusters (left 22, right 18) at fixed(+1.039), extent >= 5
 | 环节 | 取自 |
 |---|---|
 | 邻接 | 该网格的 midthickness（或配置了的邻接表） |
-| cluster 面积、峰值坐标 | 该网格的 midthickness |
-| 图谱 | 从 32k 用 `-label-resample … -largest` 转过来，然后缓存 |
+| 阈值、cluster、extent | 该网格 |
 | 出图 | 该网格的 inflated |
 | 沟回底板 | 重采样到该网格，然后缓存 |
 | 组水平统计 | 平滑度、resel、置换检验都在该密度上做 |
+| **报表** | **fs_LR 32k**——见下 |
 
 缓存放在 `runtime.tmp_dir` 下（默认系统临时目录的
 `cifti_state/atlases/` 和 `cifti_state/underlays/`）。按网格索引，
@@ -371,12 +371,45 @@ found 40 clusters (left 22, right 18) at fixed(+1.039), extent >= 5
 `--mesh` 可以覆盖自动检测，也是 `run`（而不是 `resample`）时
 解决顶点数歧义的办法。
 
-### 关于图谱的一个提醒
+### 报表一律出在 fs_LR 32k 上
 
-把分区图转到更粗的网格，在「不丢区」这个意义上是无损的——
-Glasser 的 360 个区在 fs_LR 10k 上一个不少——
-但小区用更少的顶点表示，所以报表里的逐区百分比会变粗。
-如果你的密度上本来就有原生的分区文件，把 `resources.atlas_dir` 指向它更好。
+图谱是按 fs_LR 32k 发布的。把图谱**往下**转去迁就更粗的数据也能跑，
+但这恰好丢掉了你要的东西：一个 180 区的分区图放到 10k 网格上，
+整块脑区只剩几个顶点，报表里的逐区百分比也就跟着变粗。
+
+所以报表反过来走。cluster 在数据自己的密度上找出来之后，
+用 `wb_command -label-resample … -largest` **向上**投影到 fs_LR 32k
+（每半球一次调用，所有 cluster 一起过去），在那里量、在那里命名，
+用的是原样发布的图谱。这样一来，不管分析是在什么密度上做的，
+一张表的含义都一样，两个不同密度的研究可以直接并排看。
+
+哪个数在哪儿量，不是随便定的——按每个数**是什么**来分：
+
+| 列 | 在哪量 | 为什么 |
+|---|---|---|
+| `peak_value`、`mean_value`、`sd_value`、`min_value`、`max_value` | 分析所在密度 | 这些是数据本身。插值出来的峰高是一个在你手上任何文件里都找不到的数。 |
+| `size_mm2`、`peak_x/y/z`、`centroid_x/y/z` | fs_LR 32k | 更细的网格量面积更准，坐标也和图谱对得上。 |
+| `peak_region`、`primary_region`、`primary_region_percent`、`regions` | fs_LR 32k | 图谱定义在那儿，用它自己的分辨率。 |
+| `peak_vertex` | fs_LR 32k | 真实峰值所在位置对应的那个顶点——通过共享配准球面映射过去的，不是重采样后取 argmax（那可能偏一个顶点，而且带着另一个值）。 |
+| `size_vertices` | fs_LR 32k | 报表网格。 |
+| `size_vertices_native` | 分析所在密度 | `--extent` 阈值实际作用的那个数。只有发生了投影才有这一列。 |
+
+cluster 图会写两份：一份是输入自己的布局，一份是报表网格上的
+`..._fsLR-32k.dscalar.nii`，这样 `peak_vertex` 那一列才有东西可以核对。
+**图仍然画在分析所在密度上**，用那个网格自己的曲面。
+
+本来就在 fs_LR 32k 上的分析什么都不会变：投影直接跳过，
+也不会多出 `size_vertices_native` 这一列。
+
+```yaml
+defaults:
+  report_mesh: "fsLR:32k"     # 默认
+  # report_mesh: native       # 改成每张报表都在自己的密度上量
+```
+
+单次运行用 `--report-mesh native` 也一样。如果报表网格够不着——
+它的模板不在搜索路径上——运行不会失败：表会退回到分析密度上量、
+图谱往下转（也就是这个包以前的做法），并给一条警告说明。
 
 ---
 
@@ -491,6 +524,28 @@ load_hemisphere_surfaces(settings, "midthickness", mesh="fsLR:10k")
 load_neighbors(settings, "left", mesh="fsLR:10k", source="surface")
 load_atlas("Glasser_2016", settings, mesh="fsLR:10k")     # 自动转换 + 缓存
 ```
+
+### 把跑完的分析投影到报表网格
+
+```python
+from cifti_state.mesh import (
+    project_for_report, project_stat_map, project_clusters,
+    nearest_target_vertices,
+)
+
+projection = project_for_report(stat_map, clusters, "fsLR:32k", settings)
+projection.stat_map        # fs_LR 32k 上的 SurfaceStatMap
+projection.clusters        # fs_LR 32k 上的 ClusterResult，id 和符号都不变
+projection.surfaces        # 32k 的 midthickness，左右各一
+projection.native_sizes    # cluster id → 分析密度下的顶点数
+projection.peak_vertices   # cluster id → 真实峰值在报表网格上的顶点
+projection.warnings        # 例如某个 cluster 太小、向下投影时没了
+```
+
+分析本来就在目标网格上时，`project_for_report` 返回 `None`。
+三个基本件也可以单独用：`project_stat_map`（连续值，带 ROI）、
+`project_clusters`（标签，每半球一次 `-largest`，返回
+`(ClusterResult, warnings)`）、`nearest_target_vertices`（顶点地址，走共享球面）。
 
 ---
 

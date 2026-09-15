@@ -207,15 +207,40 @@ def run_analysis(
         cancel=cancel,
     )
 
+    # 5b. the report mesh ---------------------------------------------------- #
+    # Atlases are distributed on fs_LR 32k. Rather than carry one down to meet
+    # coarser data, the finished clusters go up to the report mesh and are
+    # measured and named there, so a table means the same thing whatever
+    # density the analysis ran at.
+    projection = _project_report(spec, settings, stat_map, clusters, warnings)
+    if projection is not None:
+        peaks = _merge_peaks(
+            peaks,
+            cluster_peaks(
+                projection.stat_map, projection.clusters,
+                surfaces=projection.surfaces,
+                progress=_sub_progress(progress, 0.62, 0.70),
+                cancel=cancel,
+            ),
+            projection,
+        )
+        report_clusters = projection.clusters
+        atlas_mesh = projection.target.name
+    else:
+        report_clusters = clusters
+        atlas_mesh = spec.mesh
+
     # 6. annotation --------------------------------------------------------- #
     report_progress(progress, 0.72, "annotating against atlas")
     check_cancelled(cancel)
     atlas = load_atlas(
-        spec.atlas, settings, registry=load_registry(), mesh=spec.mesh
+        spec.atlas, settings, registry=load_registry(), mesh=atlas_mesh
     )
-    _check_atlas_mesh(atlas, stat_map, warnings)
+    _check_atlas_mesh(
+        atlas, projection.stat_map if projection is not None else stat_map, warnings
+    )
     annotations = annotate_clusters(
-        clusters,
+        report_clusters,
         atlas,
         peaks=peaks,
         top_n=spec.top_n_regions,
@@ -260,7 +285,7 @@ def run_analysis(
     if spec.output_dir:
         report_progress(progress, 0.92, "writing outputs")
         check_cancelled(cancel)
-        _write_outputs(result, stat_map, settings, spec)
+        _write_outputs(result, stat_map, settings, spec, projection)
 
     result.duration_s = time.perf_counter() - started
     report_progress(progress, 1.0, result.summary())
@@ -276,7 +301,8 @@ def run_analysis(
 
 
 def _write_outputs(
-    result: AnalysisResult, stat_map, settings: Settings, spec: AnalysisSpec
+    result: AnalysisResult, stat_map, settings: Settings, spec: AnalysisSpec,
+    projection=None,
 ) -> None:
     out_dir = Path(spec.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,6 +323,19 @@ def _write_outputs(
             map_name=stem,
         )
         result.outputs["cluster_map"] = path
+
+        if projection is not None:
+            # The report's peak_vertex, areas and coordinates are on the report
+            # mesh, so the cluster map for that mesh has to be there too --
+            # otherwise the table cannot be checked against anything.
+            tag = projection.target.name.replace(":", "-")
+            result.outputs["cluster_map_report_mesh"] = save_like(
+                out_dir / f"{stem}_{tag}.dscalar.nii",
+                projection.clusters.labels_left.astype(float),
+                projection.clusters.labels_right.astype(float),
+                projection.stat_map.template,
+                map_name=f"{stem}_{tag}",
+            )
 
     for fmt in spec.report_formats:
         path = save_report(
@@ -388,6 +427,100 @@ def _resolve_mesh(spec: AnalysisSpec, settings: Settings, stat_map, warnings: li
     else:
         log.info("input is on %s", detected.describe())
     spec.mesh = detected.name
+
+
+def _project_report(spec, settings, stat_map, clusters, warnings: list[str]):
+    """Put the finished clusters on the report mesh, if that is somewhere else.
+
+    ``None`` -- the common case -- means the analysis already ran on the report
+    mesh and nothing has to move.  Failure is not fatal: the report then falls
+    back to the analysis density with the atlas carried down to it, which is
+    what the package did before, and says so.
+    """
+    target = getattr(spec, "report_mesh", None) or settings.defaults.report_mesh
+    if not target or str(target).lower() in ("none", "native", "off", ""):
+        return None
+    if clusters.n_clusters == 0:
+        return None
+
+    from .mesh.project import project_for_report
+    from .mesh.spaces import MeshError, parse_mesh
+
+    try:
+        if parse_mesh(spec.mesh) == parse_mesh(target):
+            return None
+    except MeshError:
+        return None
+
+    try:
+        projection = project_for_report(
+            stat_map, clusters, target, settings,
+            source=spec.mesh, surface_kind=spec.geometry_surface,
+        )
+    except Exception as exc:
+        message = (
+            f"the report could not be projected from {spec.mesh} to {target} "
+            f"({exc}); the table was measured at {spec.mesh} instead, with the "
+            f"atlas resampled down to it"
+        )
+        log.warning("%s", message)
+        warnings.append(message)
+        return None
+
+    if projection is None:
+        return None
+    warnings.extend(projection.warnings)
+    log.info("%s", projection.describe())
+    return projection
+
+
+def _merge_peaks(native, projected, projection):
+    """One peak table: values from the data, geometry and extent from the report mesh.
+
+    An interpolated peak height is a number that is in no file the user has, so
+    the statistic columns stay at the analysis density.  Everything spatial
+    comes from the report mesh, and ``peak_vertex`` is the report-mesh vertex
+    sitting where the real peak is -- not the argmax of the resampled map,
+    which can land a vertex over and carry a different value.
+    """
+    import pandas as pd
+
+    value_columns = [
+        c for c in ("peak_value", "mean_value", "sd_value", "min_value", "max_value")
+        if c in native.columns
+    ]
+    merged = projected.copy()
+    if "cluster_id" not in merged.columns:
+        return merged
+
+    native_indexed = native.set_index("cluster_id")
+    merged = merged.set_index("cluster_id")
+    for column in value_columns:
+        merged[column] = native_indexed[column].reindex(merged.index)
+    if "size_vertices" in native_indexed.columns:
+        merged["size_vertices_native"] = (
+            native_indexed["size_vertices"].reindex(merged.index).astype("Int64")
+        )
+
+    if projection.peak_vertices:
+        mapped = pd.Series(projection.peak_vertices, dtype="Int64").reindex(merged.index)
+        merged["peak_vertex"] = mapped
+        for hemi, surface in projection.surfaces.items():
+            rows = merged.index[merged["hemi"] == _HEMI_LETTER[hemi]] \
+                if "hemi" in merged.columns else []
+            if len(rows) == 0:
+                continue
+            coords = surface.coords
+            vertices = merged.loc[rows, "peak_vertex"].astype(int).to_numpy()
+            for axis, name in enumerate(("peak_x", "peak_y", "peak_z")):
+                if name in merged.columns:
+                    merged.loc[rows, name] = coords[vertices, axis]
+
+    return merged.reset_index()
+
+
+#: How the peak table spells a hemisphere.
+_HEMI_LETTER = {"left": "L", "right": "R"}
 
 
 def _geometry_surfaces(

@@ -42,6 +42,7 @@ WIDE_COLUMN_ORDER = (
     "primary_region_percent",
     "regions",
     "size_vertices",
+    "size_vertices_native",
     "size_mm2",
     "peak_value",
     "peak_x",

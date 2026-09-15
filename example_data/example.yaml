@@ -56,6 +56,13 @@ resources:
 # ---- Analysis defaults --------------------------------------------------- #
 defaults:
   mesh: "32k"
+
+  # Every report is measured and named on this mesh, whatever density the data
+  # is on. Atlases are distributed on fs_LR 32k, so carrying a coarser analysis
+  # up to it beats carrying the atlas down: the region percentages stay as fine
+  # as the parcellation is. Set to "native" to measure each report at its own
+  # analysis density instead. See docs/MESHES.md.
+  report_mesh: "fsLR:32k"
   statistic: z
   direction: positive
   threshold:

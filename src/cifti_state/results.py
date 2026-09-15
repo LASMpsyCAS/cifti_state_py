@@ -60,6 +60,9 @@ class AnalysisSpec:
     legacy_mode: bool = False
 
     # annotation
+    #: Mesh the report is measured and named on. Empty or "native" keeps each
+    #: report at its own analysis density; the default follows the settings.
+    report_mesh: str = ""
     atlas: str = "Glasser_2016"
     top_n_regions: int = 2
     min_region_percent: float = 0.0

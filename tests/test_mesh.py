@@ -538,6 +538,190 @@ def test_an_atlas_follows_the_data_to_another_mesh(tmp_path, settings):
     assert set(ten.left.names.values()) == set(thirty_two.left.names.values())
 
 
+def test_projecting_clusters_keeps_every_cluster_and_invents_none(tmp_path, settings):
+    from cifti_state.core.cluster import ClusterInfo, ClusterParams, ClusterResult
+    from cifti_state.mesh.project import project_clusters
+
+    labels_left = np.zeros(10242, dtype=np.int32)
+    labels_right = np.zeros(10242, dtype=np.int32)
+    labels_left[500:900] = 1
+    labels_left[3000:3200] = 2
+    labels_right[7000:7300] = 9            # a gap in the numbering, on purpose
+    source = ClusterResult(
+        labels_left=labels_left, labels_right=labels_right,
+        clusters=[
+            ClusterInfo(1, "left", 1, 400, 500),
+            ClusterInfo(2, "left", 1, 200, 3000),
+            ClusterInfo(9, "right", -1, 300, 7000),
+        ],
+        params=ClusterParams(
+            threshold_positive=1.0, threshold_negative=None, extent=5,
+            direction="positive",
+        ),
+    )
+
+    projected, warnings = project_clusters(
+        source, "fsLR:32k", settings, source="fsLR:10k"
+    )
+
+    assert not warnings
+    assert [c.cluster_id for c in projected.clusters] == [1, 2, 9]
+    assert [c.sign for c in projected.clusters] == [1, 1, -1]
+    assert [c.hemisphere for c in projected.clusters] == ["left", "left", "right"]
+    # Nothing between the ids, and every cluster grew with the mesh.
+    assert set(np.unique(projected.concatenated())) == {0, 1, 2, 9}
+    for before, after in zip(source.clusters, projected.clusters):
+        assert after.size_vertices > before.size_vertices
+
+
+def test_the_peak_maps_to_the_vertex_it_actually_sits_on(settings):
+    """Not the argmax of the resampled map -- the real peak's own address."""
+    from cifti_state.mesh.project import nearest_target_vertices
+
+    # Mapping a mesh to itself is the identity.
+    same = nearest_target_vertices(
+        "left", [0, 100, 9000], "fsLR:32k", "fsLR:32k", settings
+    )
+    assert list(same) == [0, 100, 9000]
+
+    # Out and back lands on the vertex you started from, or its neighbour.
+    from cifti_state.io.surface import load_surface
+
+    up = nearest_target_vertices(
+        "left", [0, 500, 5000, 10241], "fsLR:10k", "fsLR:32k", settings
+    )
+    back = nearest_target_vertices("left", up, "fsLR:32k", "fsLR:10k", settings)
+    sphere = load_surface(settings.surface_for("left", "midthickness", mesh="fsLR:10k"))
+    moved = np.linalg.norm(
+        sphere.coords[np.asarray(back)] - sphere.coords[[0, 500, 5000, 10241]], axis=1
+    )
+    assert moved.max() < 5.0            # millimetres, i.e. within a vertex or two
+
+
+def test_the_report_is_measured_on_fs_lr_32k_when_the_data_is_not(tmp_path, settings):
+    """The point of the report mesh: one table, whatever density it came from."""
+    import nibabel as nib
+
+    from cifti_state.mesh import resample_cifti
+    from cifti_state.pipeline import run_analysis
+    from cifti_state.results import AnalysisSpec
+
+    source = EXAMPLES / "maps" / "group_mean_thresh_fdr_E_C.dscalar.nii"
+    if not source.exists():
+        pytest.skip("the example maps are not present")
+    small = tmp_path / "small.dscalar.nii"
+    resample_cifti(source, small, "fsLR:10k", settings, nan="mask")
+
+    result = run_analysis(
+        AnalysisSpec(
+            input_path=small, statistic="z", threshold_method="fixed",
+            threshold_value=1.039, direction="positive", extent=5,
+            atlas="Glasser_2016", output_dir=str(tmp_path / "out"),
+        ),
+        settings,
+    )
+    report = result.report
+    assert result.spec.mesh == "fsLR:10k"
+    assert result.clusters.n_clusters > 0
+
+    # Both extents are there, and the report-mesh one is the larger.
+    assert "size_vertices_native" in report.columns
+    assert (report["size_vertices"] >= report["size_vertices_native"]).all()
+
+    # The statistic values are the data's, not an interpolation of it.
+    values = np.asarray(nib.load(str(small)).get_fdata()).ravel()
+    finite = values[np.isfinite(values)]
+    # (the report rounds to three decimals, hence the tolerance)
+    assert report["peak_value"].max() <= finite.max() + 1e-3
+    assert report["peak_value"].max() == pytest.approx(finite.max(), abs=1e-3)
+
+    # The peaks address the report mesh, and land inside their own cluster.
+    projected = result.outputs.get("cluster_map_report_mesh")
+    assert projected is not None and Path(projected).exists()
+    image = nib.load(str(projected))
+    brain = image.header.get_axis(image.ndim - 1)
+    row = np.asarray(image.get_fdata()).ravel()
+    full = {"L": np.zeros(32492), "R": np.zeros(32492)}
+    for name, sl, model in brain.iter_structures():
+        side = "L" if str(name).endswith("LEFT") else "R"
+        full[side][np.asarray(model.vertex)] = row[sl]
+    for cluster in report.itertuples():
+        assert full[cluster.hemi][int(cluster.peak_vertex)] == cluster.cluster_id
+
+
+def test_asking_for_the_native_report_mesh_leaves_everything_where_it_was(
+    tmp_path, settings
+):
+    from cifti_state.mesh import resample_cifti
+    from cifti_state.pipeline import run_analysis
+    from cifti_state.results import AnalysisSpec
+
+    source = EXAMPLES / "maps" / "group_mean_thresh_fdr_E_C.dscalar.nii"
+    if not source.exists():
+        pytest.skip("the example maps are not present")
+    small = tmp_path / "small.dscalar.nii"
+    resample_cifti(source, small, "fsLR:10k", settings, nan="mask")
+
+    result = run_analysis(
+        AnalysisSpec(
+            input_path=small, statistic="z", threshold_method="fixed",
+            threshold_value=1.039, direction="positive", extent=5,
+            atlas="Glasser_2016", report_mesh="native", output_dir=None,
+        ),
+        settings,
+    )
+    assert "size_vertices_native" not in result.report.columns
+    assert result.report["size_vertices"].sum() == sum(
+        c.size_vertices for c in result.clusters.clusters
+    )
+
+
+def test_a_32k_analysis_is_untouched_by_the_report_mesh(tmp_path, settings):
+    """The projection must be a no-op when the analysis is already there."""
+    from cifti_state.pipeline import run_analysis
+    from cifti_state.results import AnalysisSpec
+
+    source = EXAMPLES / "maps" / "group_mean_thresh_fdr_E_C.dscalar.nii"
+    if not source.exists():
+        pytest.skip("the example maps are not present")
+
+    result = run_analysis(
+        AnalysisSpec(
+            input_path=source, statistic="z", threshold_method="fixed",
+            threshold_value=1.039, direction="positive", extent=20,
+            atlas="Glasser_2016", legacy_mode=True, output_dir=None,
+        ),
+        settings,
+    )
+    assert result.clusters.n_clusters == 32
+    assert "size_vertices_native" not in result.report.columns
+    assert "cluster_map_report_mesh" not in result.outputs
+
+
+def test_an_unreachable_report_mesh_falls_back_instead_of_failing(tmp_path, settings):
+    """A missing template pack must not cost the user their table."""
+    from cifti_state.mesh import resample_cifti
+    from cifti_state.pipeline import run_analysis
+    from cifti_state.results import AnalysisSpec
+
+    source = EXAMPLES / "maps" / "group_mean_thresh_fdr_E_C.dscalar.nii"
+    if not source.exists():
+        pytest.skip("the example maps are not present")
+    small = tmp_path / "small.dscalar.nii"
+    resample_cifti(source, small, "fsLR:10k", settings, nan="mask")
+
+    result = run_analysis(
+        AnalysisSpec(
+            input_path=small, statistic="z", threshold_method="fixed",
+            threshold_value=1.039, direction="positive", extent=5,
+            atlas="Glasser_2016", report_mesh="fsaverage6", output_dir=None,
+        ),
+        settings,
+    )
+    assert result.clusters.n_clusters > 0
+    assert any("could not be projected" in w for w in result.warnings)
+
+
 def test_the_whole_pipeline_runs_at_10k(tmp_path, settings):
     """Detection, adjacency, geometry and annotation, all at the input's density."""
     from cifti_state.mesh import resample_cifti

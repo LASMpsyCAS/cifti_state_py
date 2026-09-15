@@ -8,7 +8,7 @@ Take a statistic map on the cortical surface, find the clusters that survive a t
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-207%20passing-brightgreen.svg)](#tests)
+[![Tests](https://img.shields.io/badge/tests-291%20passing-brightgreen.svg)](#tests)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#install)
 
 [English](README.md) · [中文](README.zh-CN.md)
@@ -33,13 +33,14 @@ map.dscalar.nii  ──▶  threshold  ──▶  clusters  ──▶  peaks + a
 | | |
 |---|---|
 | **Reads any fs_LR CIFTI layout** | 91k, 59k and 64k all describe the same left+right 32k cortex. The vertex mapping comes from each file's own brain models, so nothing is assumed about greyordinate counts — and results are written back in the layout you gave. GIFTI metric pairs too. |
-| **More than one resolution** | fs_LR 10k and fsaverage5 run the whole pipeline at their own density — adjacency, areas, atlas, figure — and `cifti-state resample` moves data between meshes through `wb_command` with the right spheres, the area metrics, and the medial wall held out of the interpolation. |
+| **More than one resolution** | fs_LR 10k and fsaverage5 run the whole pipeline at their own density, while the report is always measured and named on fs_LR 32k, where the atlases live — so tables from different densities compare directly. `cifti-state resample` moves data between meshes through `wb_command` with the right spheres, the area metrics, and the medial wall held out of the interpolation. |
 | **Clustering that says what it did** | Positive, negative or two-sided; a minimum extent in vertices; fixed, FDR or percentile thresholds; deterministic cluster numbering. Every result carries the parameter snapshot that produced it. |
 | **Region names from the atlas itself** | Each `label.gii`'s own LabelTable is the source of truth, keyed by (hemisphere, label id) — so every atlas in the template pack works, not only the ones with a lookup table shipped alongside. |
 | **Honest peak tables** | Peak *and* mean value under their own names, plus SD, min/max, surface area in mm², peak and centroid coordinates, and the share of each cluster falling in each region. |
 | **Group statistics, corrected** | One-sample, two-sample and paired t-tests across subjects, with covariates — then family-wise error correction over the whole surface by random field theory, by permutation, and by TFCE, so the three can be compared. The TFCE agrees with PALM to machine precision. |
 | **Three ways in, one core** | `cifti-state` on the command line, `import cifti_state` in a notebook, or `cifti-state-gui`. All three call the same functions, so anything the interface can do is scriptable. |
 | **Publication figures and a live 3D view** | surfplot for the figure you export, PyVista for the one you rotate — both over the same arrays, both with the sulcal underlay. |
+| **Brain network figures** | A glass brain with node spheres and **directed** edges, from the four text files NeuroMArVL uses — including its edge-count rule, reproduced exactly, and its saved settings files. |
 | **Runs the example out of the box** | `example_data/` ships the maps *and* the minimum templates. Clone, install, run. |
 
 It began as a set of MATLAB functions for this analysis; the Python package was
@@ -210,8 +211,9 @@ cifti-state run tmap.dscalar.nii --statistic t --df 29 --method fdr --q 0.05
 <details>
 <summary><b>4 · A map that is not on fs_LR 32k</b></summary>
 
-Nothing to set: the density is read from the file, and the whole pipeline runs
-at it — adjacency, cluster areas, the atlas, the figure.
+Nothing to set: the density is read from the file and the whole pipeline runs
+at it — adjacency, clustering, the figure. The report is measured and named on
+fs_LR 32k, where the atlases are defined, so tables compare across densities.
 
 ```bash
 cifti-state run zmap_10k.dscalar.nii --method fixed --threshold 1.039 --extent 5
@@ -1044,13 +1046,26 @@ resampling atlas Glasser_2016 from fsLR:32k to fsLR:10k
 found 40 clusters (left 22, right 18) at fixed(+1.039), extent >= 5
 ```
 
-The density is read from the file. The adjacency comes from that mesh's
-surface, cluster areas and peak coordinates from its midthickness, the figure
-from its inflated surface, and the sulcal underlay is resampled to it. The
-Glasser atlas ships on 32k, so it is resampled once with
-`wb_command -label-resample ... -largest` — each target vertex takes the label
-covering most of it, never an interpolated average — and cached. All 360
-regions survive.
+The density is read from the file. The adjacency, the threshold, the clustering
+and the figure all happen there, on that mesh's own surfaces, with the sulcal
+underlay resampled to it.
+
+**The report, though, is written on fs_LR 32k.** That is where the atlases are
+distributed, and carrying a 180-region parcellation *down* to a 10k mesh leaves
+whole areas with a handful of vertices and makes the region percentages coarse.
+So the finished clusters go *up* instead — `wb_command -label-resample …
+-largest`, one call per hemisphere — and are measured and named there. A table
+means the same thing whatever density produced it.
+
+The split follows what each number is: statistic values (`peak_value`, mean, SD,
+min, max) stay at the analysis density, because those are the data; area,
+coordinates, `peak_vertex` and every region column come from fs_LR 32k. A
+`size_vertices_native` column keeps the extent the `--extent` threshold was
+applied to. The cluster map is written on both meshes so the table can be
+checked. Set `report_mesh: native` (or `--report-mesh native`) to measure each
+report at its own density instead.
+
+Details in [`docs/MESHES.md`](docs/MESHES.md#the-report-is-written-on-fs_lr-32k).
 
 ### From Python
 
@@ -1080,6 +1095,155 @@ here, so the default backend calls Workbench directly: one dependency fewer, no
 download (which matters on a machine that cannot reach OSF), and a call trace
 you can read. Pass `backend="neuromaps"` if you would rather use its atlas
 management.
+
+## Brain network figures
+
+A statistic map answers "where"; a connectivity matrix answers "between what,
+and in which direction". `cifti-state network` draws the second kind on the
+same fs_LR 32k surface: a translucent glass brain, node spheres sized and
+coloured by attributes, and **directed** edges with arrowheads.
+
+![A directed network on the glass brain](docs/images/network.png)
+
+> **Full reference:** [`docs/NETWORK.md`](docs/NETWORK.md) — every option,
+> every mode, the exact edge-selection rule and how it was verified, the
+> Python API, and what each warning means. The section below is the tour.
+
+```bash
+python examples/network_example.py     # six figures, no data needed
+```
+
+**The input format, the edge-selection rule and the saved settings files are
+[NeuroMArVL](https://immersive.erc.monash.edu/neuromarvl/)'s** (Adamson et al.,
+*Network Neuroscience* 2026 — see [References](#references-and-acknowledgements)
+for the citation and what is and is not shared with it). The point of this
+module is that a figure you tuned interactively in that tool can be reproduced
+here from a script, in batch, under version control.
+
+### The control window
+
+The numbers that decide a network figure — how many edges, how transparent the
+shell, how thick the tubes, whether labels help or crowd — are settled by
+looking, not by reasoning. `--interactive` opens every option as a widget beside
+a brain you can drag:
+
+![The network control window](docs/images/network_window.png)
+
+```bash
+cifti-state network net/ -k 16 --labels-on --interactive    # needs pip install -e ".[gui]"
+```
+
+Changes accumulate and one **Refresh** applies them, because rebuilding a dense
+network takes a second or two and a panel that redraws on every spin-box click
+spends most of its time drawing states you did not want to see. `Auto` turns
+continuous redraw on when you are nudging a single value; the camera and the
+view menu never wait.
+
+The bar under the view always shows the `cifti-state network` line that
+reproduces exactly what is on screen — `Copy` puts it on the clipboard, `Save
+figure…` writes the file. Nothing is stored implicitly, so a figure that came
+out of this window is still traceable to a command you can read, re-run and put
+in a methods section. (A test parses that line back through the CLI to check it
+still means the same thing.)
+
+### The input
+
+Four plain-text files:
+
+```
+coordinates.txt          n rows of  x y z   (MNI millimetres)
+labels.txt               n node names
+matrix_<name>.txt        n x n;  matrix[i][j] is i -> j
+attributes_<name>.txt    n rows of numeric columns, with a header
+```
+
+Spaces, tabs and commas all separate columns, and a header row is detected
+rather than declared. **The matrix is never symmetrised** — `M[i][j] ≠ M[j][i]`
+is the signal in effective connectivity, not noise to average away — and any
+disagreement between the files is refused by name rather than broadcast into
+silence:
+
+```
+NetworkError: 9 coordinates but the matrix is 12 x 12; the two files
+              describe different networks
+```
+
+### Which edges get drawn
+
+Every network figure is a thresholded one, so what the threshold means is part
+of the result. Three rules, and the generated caption always names the one that
+was used and the cutoff it produced:
+
+```bash
+cifti-state network net/ --top 20 -o fig.png           # N strongest directed edges
+cifti-state network net/ --threshold 0.12 -o fig.png   # weight >= a number you chose
+cifti-state network net/ -k 16 -o fig.png              # NeuroMArVL's edge-count slider
+```
+
+The third is reproduced exactly, because a figure made here and a figure made
+in the browser have to be the same figure: rank the unordered pairs by their
+stronger direction, cut at the k-th, then draw **every** directed edge at or
+above that cut. `k` counts pairs and the figure counts directions, so k is not
+the arrow count — on a real 9-node matrix `k=16` draws 24 arrows.
+`--explain-k` prints the whole table and stops:
+
+```
+   k       cutoff   arrows
+  16     0.045925       24
+  ...
+  30     0.001554       51
+  31    -0.001691       52  <- cutoff is negative
+
+largest k with a positive cutoff: 30
+```
+
+That last line is the one that matters. Past it the cutoff goes negative and
+inhibitory connections get drawn exactly like excitatory ones, with nothing
+marking them — so the renderer warns, the caption says so on the figure, and
+`--drop-negative` or `--edge-color sign` are the two honest ways forward.
+
+The rule is not approximated. The test suite carries NeuroMArVL's own published
+`k → arrows` table for five datasets — 29 numbers, plus each one's largest
+positive `k` — and checks all of them.
+
+### How it looks
+
+```bash
+cifti-state network taskaverage/ -k 16 \
+    --size-by out_degree --color-by group_id --labels-on \
+    --edge-color node-transitioning --views left dorsal -o out_degree.png
+```
+
+| | |
+|---|---|
+| **Nodes** | radius and colour from any attribute column; an attribute with ≤ 20 distinct values becomes a grouping variable with a discrete palette, more than that becomes a measurement with a colour map |
+| **Edge colour** | `none`, `weight`, `signed` (dark red positive, dark purple negative, depth carrying the strength), `node` (the source's colour), `node-transitioning` (source fading into target), `sign` (two flat colours) |
+| **Direction** | `arrow` (a cone at the target), `gradient`, `taper`, `opacity`, `none` |
+| **Width** | fixed in millimetres, or scaled by `\|weight\|` between two radii you set |
+| **The shell** | any configured surface, per-hemisphere, opacity, and `--split MM` to pull the hemispheres apart |
+| **Panels** | up to six views in one figure, cropped to content and re-padded so every panel stays at the same pixel scale |
+
+A settings JSON saved from the browser loads directly and brings across the
+size attribute and range, the palette, the edge modes, the surface, the view
+and the edge count; anything with no still-figure equivalent (2D layouts,
+rotation, animated edges) logs a line naming itself rather than disappearing:
+
+```bash
+cifti-state network net/ --settings settings/size_in_degree.json -k 16 -o fig.png
+```
+
+### The check that catches the real mistake
+
+Node coordinates in voxel indices, in a different template, or left-right
+flipped all produce a figure that looks perfectly fine. Every run compares the
+coordinates against the surface's own bounding box and says so when they do not
+belong together:
+
+```
+warning: 9 of 9 nodes fall outside the surface's bounding box (worst by
+190.4 mm): IFJ, SFL, B55pre, … The coordinates are probably not in the
+same space as the mesh.
+```
 
 ## Roadmap
 
@@ -1156,6 +1320,7 @@ Longer-form documentation lives in `docs/`:
 |---|---|
 | [`docs/INSTALL.md`](docs/INSTALL.md) | A ten-step Windows install, with the expected output of every command. |
 | [`docs/MESHES.md`](docs/MESHES.md) · [中文](docs/MESHES.zh-CN.md) | Surface meshes and resampling: every mesh, configuration key, CLI option, Python entry point and error message, plus a worked case. |
+| [`docs/NETWORK.md`](docs/NETWORK.md) · [中文](docs/NETWORK.zh-CN.md) | Glass-brain network figures: the four input files, the three edge-selection rules and how the NeuroMArVL one was verified, every style option, settings-file compatibility, and what each warning means. |
 
 `core/` is written to six rules so a Qt front end can call it directly: pure
 functions over arrays, no printing (only `logging`), a `progress` callback on
@@ -1166,8 +1331,9 @@ that produced it — `AnalysisResult.to_json()` is enough to reproduce a run.
 ## Tests
 
 ```bash
-pytest          # 207 tests; on a bare clone 3 skip (they need the neighbour
-                # tables and the Desikan atlas, which are not bundled)
+pytest          # 291 tests; on a bare clone 8 skip (they need the neighbour
+                # tables, the Desikan atlas, or a connectivity dataset that is
+                # not bundled)
 ```
 
 No setup: the data-backed tests run against `example_data/` by default,
@@ -1188,7 +1354,8 @@ executable; annotation and report assembly; cluster masks; the underlay's
 greyscale and its sign detection; font resolution and the numeric-field
 defences; the interface run headless — including the assertion that worker
 callbacks land on the GUI thread, which every widget update depends on; and the
-regression fixtures above.
+regression fixtures above; and the network module's readers, its three
+edge-selection rules, its settings-file round trip and its scene assembly.
 
 The group statistics get their own arbiters: every t-test is checked against
 scipy's `ttest_1samp` / `ttest_ind` / `ttest_rel` (including Welch's degrees of
@@ -1256,6 +1423,33 @@ permutation reference above. The calibration of
 cluster-extent inference is Eklund A, Nichols TE, Knutsson H. *Cluster failure:
 why fMRI inferences for spatial extent have inflated false-positive rates.*
 PNAS 2016; 113:7900–7905.
+
+**Network figures.** The input format, the edge-selection rule and the settings
+files that `cifti-state network` reads are those of **NeuroMArVL**, from the
+Immersive Analytics Lab at Monash University:
+
+> Adamson CL, Gajwani M, Klapperstueck M, Manley J, Dwyer T, Fornito A.
+> *NeuroMArVL: An interactive and collaborative web-based tool for visualizing
+> brain networks.* Network Neuroscience 2026; 10(3):683–705.
+> doi:[10.1162/netn.a.569](https://doi.org/10.1162/netn.a.569)
+>
+> Tool: <https://immersive.erc.monash.edu/neuromarvl/> ·
+> Source: <https://github.com/NSBLab/NeuroMArVL> (GPL v3; developed by Tim
+> Dwyer, Alex Fornito, Thanh Nhan Pham, Mingzheng Shi, Nicholas Smith and
+> James Manley, Monash University, 2015–2017)
+
+**Please cite that paper for any figure made with `cifti-state network`**, and
+this package alongside it if the reproducibility matters to what you are
+reporting.
+
+What is shared, and what is not: the renderer here is an **independent
+implementation**, not a port — no NeuroMArVL code is used or included, and this
+package is MIT-licensed. What it reproduces deliberately is the *behaviour* that
+has to match for the two tools to draw the same figure: the four-file input
+format, and the edge-count rule, checked against that tool's own published
+`k → arrows` table. It covers only the 3D glass-brain view. The interactive web
+tool remains the place to explore a network and to collaborate on one, and its
+2D, circular and topology layouts have no equivalent here.
 
 **Software.** Figures are drawn with
 [surfplot](https://github.com/danjgale/surfplot) and

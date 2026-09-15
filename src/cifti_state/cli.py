@@ -8,6 +8,7 @@
     cifti-state stats participants.csv ... # a group t-test, corrected
     cifti-state meshes                     # what surface meshes are available
     cifti-state resample IN --to fsLR:10k  # move a map to another mesh
+    cifti-state network net/ -k 16 -o f.png  # a glass-brain network figure
 
 Everything goes through :func:`cifti_state.pipeline.run_analysis`, the same
 entry point a GUI uses.
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import yaml
+
+from .network.style import EDGE_COLOR_MODES, EDGE_DIRECTION_MODES
 
 from .config import (
     ConfigError,
@@ -121,6 +124,136 @@ def build_parser() -> argparse.ArgumentParser:
     resample.add_argument("--backend", default="wb", choices=["wb", "neuromaps"])
     resample.add_argument("--print-commands", action="store_true",
                           help="print the wb_command lines that were run")
+
+    # -- network -------------------------------------------------------------- #
+    network = sub.add_parser(
+        "network",
+        help="draw a node-and-edge network on a glass brain",
+        description=(
+            "Draw a brain network from four text files: node coordinates in "
+            "MNI millimetres, node labels, an n x n connectivity matrix and a "
+            "table of node attributes. The matrix is read as directed -- "
+            "matrix[i][j] is i -> j -- and is never symmetrised."
+        ),
+    )
+    network.add_argument(
+        "input", type=Path,
+        help="a directory holding coordinates.txt, matrix_*.txt and friends, "
+             "or the matrix file itself",
+    )
+    network.add_argument("-o", "--output", type=Path,
+                         help="figure to write (.png, .pdf, .svg)")
+    network.add_argument("--coordinates", type=Path,
+                         help="node coordinates, if not alongside the matrix")
+    network.add_argument("--labels", type=Path)
+    network.add_argument("--attributes", type=Path)
+    network.add_argument("--dataset",
+                         help="which matrix_<name>.txt to use when a "
+                              "directory holds several")
+    network.add_argument("--abs", dest="absolute_file", action="store_true",
+                         help="prefer the *_abs.txt pair, which holds |weight| "
+                              "so that negative connections are drawn too")
+
+    edges_group = network.add_argument_group("which edges to draw")
+    edges_group.add_argument(
+        "-k", "--edge-count", type=int,
+        help="NeuroMArVL's edge-count slider: rank the unordered pairs by "
+             "their stronger direction and cut at the k-th. Not the number of "
+             "arrows -- usually fewer. See --explain-k",
+    )
+    edges_group.add_argument("--threshold", type=float,
+                             help="draw every edge at or above this weight")
+    edges_group.add_argument("--top", type=int,
+                             help="draw the N strongest directed edges")
+    edges_group.add_argument("--rank-abs", action="store_true",
+                             help="rank by |weight| rather than by the signed "
+                                  "value, so strong negative edges compete")
+    edges_group.add_argument("--drop-negative", action="store_true",
+                             help="leave negative weights out rather than "
+                                  "drawing them as if they were positive")
+    edges_group.add_argument("--explain-k", action="store_true",
+                             help="print the k -> arrows table for this matrix "
+                                  "and stop, without drawing anything")
+
+    style_group = network.add_argument_group("appearance")
+    style_group.add_argument("--settings", type=Path,
+                             help="a NeuroMArVL settings JSON to start from")
+    style_group.add_argument("--size-by", help="attribute driving node size")
+    style_group.add_argument("--color-by", help="attribute driving node colour")
+    style_group.add_argument("--size-range", type=float, nargs=2,
+                             metavar=("MIN", "MAX"),
+                             help="node radius in mm (default 1.4 6.3)")
+    style_group.add_argument("--colors", nargs="+", metavar="HEX",
+                             help="palette for a discrete colour attribute, "
+                                  "in order of increasing value")
+    style_group.add_argument("--edge-color",
+                             choices=list(EDGE_COLOR_MODES),
+                             help="none | weight (|weight| on a colour map) | "
+                                  "signed (a diverging map over the signed "
+                                  "weight) | node | node-transitioning | sign")
+    style_group.add_argument("--edge-colors", nargs=2,
+                             metavar=("NEGATIVE", "POSITIVE"),
+                             help="the two ends used by --edge-color sign and "
+                                  "signed (default dark purple, dark red)")
+    style_group.add_argument("--signed-fade", type=float, metavar="F",
+                             help="how far towards white the weakest edge of "
+                                  "each sign is drawn under --edge-color "
+                                  "signed (0 = every edge full strength "
+                                  "colour, default 0.42)")
+    style_group.add_argument("--direction",
+                             choices=list(EDGE_DIRECTION_MODES),
+                             help="how direction is shown (default arrow)")
+    style_group.add_argument("--edge-width", type=float,
+                             help="tube radius in mm (default 0.55)")
+    style_group.add_argument("--width-by-weight", action="store_true",
+                             help="scale the tube radius with |weight|")
+    style_group.add_argument("--width-range", type=float, nargs=2,
+                             metavar=("MIN", "MAX"),
+                             help="tube radius in mm for the weakest and "
+                                  "strongest edge (default 0.25 1.4); implies "
+                                  "--width-by-weight")
+    style_group.add_argument("--surface", default=None,
+                             help="which anatomical surface to use for the "
+                                  "shell (default midthickness)")
+    style_group.add_argument("--brain-opacity", type=float,
+                             help="0 hides the shell, 1 makes it solid "
+                                  "(default 0.55)")
+    style_group.add_argument("--hemisphere", choices=["left", "right", "both"],
+                             default=None)
+    style_group.add_argument("--split", type=float, default=None,
+                             metavar="MM",
+                             help="pull the hemispheres apart by this many mm")
+    style_group.add_argument("--labels-on", dest="show_labels",
+                             action="store_true", help="draw node names")
+    style_group.add_argument("--no-labels", dest="show_labels",
+                             action="store_false")
+    style_group.set_defaults(show_labels=None)
+
+    out_group = network.add_argument_group("output")
+    out_group.add_argument("--views", nargs="+", default=None,
+                           help="one panel per view: left right anterior "
+                                "posterior dorsal ventral (default: left "
+                                "dorsal anterior)")
+    out_group.add_argument("--title", default=None)
+    out_group.add_argument("--no-caption", action="store_true",
+                           help="leave off the line describing the threshold")
+    out_group.add_argument("--size", type=int, nargs=2, default=(1000, 850),
+                           metavar=("W", "H"), help="pixels per panel")
+    out_group.add_argument("--dpi", type=int, default=200)
+    out_group.add_argument("--zoom", type=float, default=1.0)
+    out_group.add_argument("--columns", type=int, default=None)
+    out_group.add_argument("--vector", action="store_true",
+                           help="write real vector output through gl2ps; one "
+                                "view only, and the shading is flattened")
+    out_group.add_argument("--interactive", action="store_true",
+                           help="open a control window -- every option as a "
+                                "widget beside a brain you can drag -- instead "
+                                "of writing a file; the command line for "
+                                "whatever you tune is always shown, and Save "
+                                "writes the figure")
+    out_group.add_argument("--save-settings", type=Path,
+                           help="also write the resolved style back out as a "
+                                "NeuroMArVL settings JSON")
 
     # -- config ------------------------------------------------------------- #
     cfg = sub.add_parser("config", help="inspect or create configuration files")
@@ -223,6 +356,10 @@ def _add_analysis_args(parser: argparse.ArgumentParser) -> None:
                    help="reproduce the original MATLAB behaviour exactly")
 
     g = parser.add_argument_group("annotation")
+    g.add_argument("--report-mesh", dest="report_mesh",
+                   help="mesh the report is measured and named on "
+                        "(default fsLR:32k, where the atlases live); "
+                        "'native' keeps it at the analysis density")
     g.add_argument("--atlas")
     g.add_argument("--top-n", type=int, dest="top_n_regions")
     g.add_argument("--min-percent", type=float, dest="min_region_percent")
@@ -276,7 +413,208 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _cmd_meshes(args, settings)
     if args.command == "resample":
         return _cmd_resample(args, settings)
+    if args.command == "network":
+        return _cmd_network(args, settings)
     return 1
+
+
+def _cmd_network(args, settings) -> int:
+    """Draw a node-and-edge network on a glass brain."""
+    from dataclasses import replace
+
+    from .network import (
+        NetworkError, NetworkStyle, load_marvl_settings, load_network,
+        load_network_dir, render_network, save_marvl_settings,
+    )
+    from .network.scene import check_coverage
+    from .network.threshold import max_positive_edge_count, pair_maxima
+
+    import numpy as np
+
+    # -- the data ----------------------------------------------------------- #
+    try:
+        if args.input.is_dir():
+            data = load_network_dir(
+                args.input, dataset=args.dataset or "",
+                absolute=args.absolute_file,
+            )
+        else:
+            coordinates = args.coordinates
+            if coordinates is None:
+                guess = args.input.parent / "coordinates.txt"
+                if not guess.exists():
+                    print(
+                        "error: give --coordinates, or put coordinates.txt "
+                        f"next to {args.input.name}", file=sys.stderr,
+                    )
+                    return 2
+                coordinates = guess
+            labels = args.labels
+            if labels is None and (args.input.parent / "labels.txt").exists():
+                labels = args.input.parent / "labels.txt"
+            data = load_network(
+                coordinates, args.input, labels=labels,
+                attributes=args.attributes,
+            )
+    except NetworkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(data.describe())
+    for role, path in data.sources.items():
+        print(f"  {role:<12} {path}")
+
+    # -- k -> arrows, and stop -------------------------------------------- #
+    if args.explain_k:
+        values = pair_maxima(data.matrix)
+        limit = max_positive_edge_count(data.matrix)
+        print()
+        print("The edge-count slider cuts the ranked pair maxima at position k,")
+        print("then draws every directed edge at or above that cut. So k counts")
+        print("pairs and the figure counts directions -- they differ.")
+        print()
+        print(f"{'k':>4} {'cutoff':>12} {'arrows':>8}")
+        offdiag = ~np.eye(data.n_nodes, dtype=bool)
+        for k in range(1, values.size + 1):
+            cut = float(values[k - 1])
+            arrows = int(((data.matrix >= cut) & offdiag).sum())
+            flag = "" if k <= limit else "  <- cutoff is negative"
+            print(f"{k:>4} {cut:>12.6f} {arrows:>8}{flag}")
+        print()
+        print(f"largest k with a positive cutoff: {limit}")
+        return 0
+
+    # -- the style ---------------------------------------------------------- #
+    try:
+        style = (load_marvl_settings(args.settings) if args.settings
+                 else NetworkStyle())
+    except NetworkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    node = style.node
+    if args.size_by is not None:
+        node = replace(node, size_by=args.size_by)
+    if args.color_by is not None:
+        node = replace(node, color_by=args.color_by)
+    if args.size_range is not None:
+        node = replace(node, size_range=tuple(args.size_range))
+    if args.colors:
+        node = replace(node, discrete_colors=tuple(args.colors))
+    if args.show_labels is not None:
+        node = replace(node, labels=bool(args.show_labels))
+
+    edge = style.edge
+    edge_changes: dict = {}
+    if args.edge_color is not None:
+        edge_changes["color_mode"] = args.edge_color
+    if args.direction is not None:
+        edge_changes["direction_mode"] = args.direction
+    if args.edge_width is not None:
+        edge_changes["width"] = args.edge_width
+    if args.width_by_weight or args.width_range is not None:
+        edge_changes["width_by_weight"] = True
+    if args.width_range is not None:
+        edge_changes["width_range"] = tuple(args.width_range)
+    if args.edge_colors:
+        edge_changes["negative_color"] = args.edge_colors[0]
+        edge_changes["positive_color"] = args.edge_colors[1]
+    if args.signed_fade is not None:
+        edge_changes["signed_fade"] = args.signed_fade
+    if edge_changes:
+        edge = replace(edge, **edge_changes)
+
+    brain = style.brain
+    brain_changes: dict = {}
+    if args.surface is not None:
+        brain_changes["surface"] = args.surface
+    if args.brain_opacity is not None:
+        brain_changes["opacity"] = args.brain_opacity
+        brain_changes["show"] = args.brain_opacity > 0
+    if args.hemisphere is not None:
+        brain_changes["hemispheres"] = (
+            ("left", "right") if args.hemisphere == "both"
+            else (args.hemisphere,)
+        )
+    if args.split is not None:
+        brain_changes["split_mm"] = args.split
+    if brain_changes:
+        brain = replace(brain, **brain_changes)
+
+    views = tuple(args.views) if args.views else (
+        style.views if args.settings else ("left", "dorsal", "anterior")
+    )
+    style = replace(
+        style, node=node, edge=edge, brain=brain, views=views,
+        title=args.title if args.title is not None else style.title,
+    )
+
+    # -- is this network even in the same space as the surfaces? ------------ #
+    try:
+        coverage = check_coverage(data, settings, surface=brain.surface)
+    except NetworkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if coverage["n_inside"] < coverage["n_nodes"]:
+        names = ", ".join(coverage["outside_nodes"][:6])
+        print(
+            f"warning: {coverage['n_nodes'] - coverage['n_inside']} of "
+            f"{coverage['n_nodes']} nodes fall outside the surface's bounding "
+            f"box (worst by {coverage['worst_outside_mm']:.1f} mm): {names}. "
+            "The coordinates are probably not in the same space as the mesh.",
+            file=sys.stderr,
+        )
+
+    # -- draw --------------------------------------------------------------- #
+    if args.interactive:
+        from .network.qtwindow import QtMissing, open_window
+
+        try:
+            open_window(
+                data, settings, style,
+                edge_count=args.edge_count, view=views[0],
+                source=args.input, output=str(args.output or "figure.png"),
+            )
+            return 0
+        except QtMissing as exc:
+            # Fall back to the in-scene sliders rather than refusing: they
+            # need only PyVista, which is already here if anything rendered.
+            print(f"{exc}\n\nFalling back to the in-scene sliders.",
+                  file=sys.stderr)
+            from .network.interactive import explore
+
+            explore(
+                data, settings, style,
+                edge_count=args.edge_count, view=views[0],
+                source=args.input, output=str(args.output or "figure.png"),
+            )
+            return 0
+
+    if args.output is None:
+        print("error: give -o/--output", file=sys.stderr)
+        return 2
+    try:
+        figure = render_network(
+            data, settings, style=style, out=args.output, views=views,
+            edge_count=args.edge_count, threshold=args.threshold,
+            top=args.top, absolute=args.rank_abs,
+            drop_negative=args.drop_negative,
+            size=tuple(args.size), zoom=args.zoom, columns=args.columns,
+            dpi=args.dpi, show_caption=not args.no_caption,
+            vector=args.vector,
+        )
+    except NetworkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if figure.edges is not None:
+        print(f"\n{figure.edges.describe()}")
+    print(f"wrote {figure.path}")
+
+    if args.save_settings:
+        save_marvl_settings(style, args.save_settings)
+        print(f"wrote {args.save_settings}")
+    return 0
 
 
 def _cmd_meshes(args, settings) -> int:
@@ -625,6 +963,7 @@ def _spec_from_args(args, settings, input_path: Optional[Path] = None) -> Analys
         direction=defaults.direction,
         extent=defaults.extent,
         mesh=defaults.mesh,
+        report_mesh=defaults.report_mesh,
         neighbor_source=defaults.neighbor_source,
         atlas=defaults.atlas,
         legacy_mode=defaults.legacy_mode,
@@ -640,7 +979,7 @@ def _spec_from_args(args, settings, input_path: Optional[Path] = None) -> Analys
         "statistic": "statistic", "df": "df", "column": "column",
         "method": "threshold_method", "threshold": "threshold_value",
         "q": "fdr_q", "percentile": "percentile", "direction": "direction",
-        "extent": "extent", "mesh": "mesh",
+        "extent": "extent", "mesh": "mesh", "report_mesh": "report_mesh",
         "neighbor_source": "neighbor_source", "inf_policy": "inf_policy",
         "atlas": "atlas", "top_n_regions": "top_n_regions",
         "min_region_percent": "min_region_percent",
